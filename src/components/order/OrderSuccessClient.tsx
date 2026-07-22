@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getOrderResult, ApiClientError, type OrderResult } from "@/lib/api";
+import { clearSession } from "@/lib/cartSession";
 import { getPlan } from "@/config/plans";
 import { whatsappShareUrl } from "@/lib/whatsapp";
 import { track } from "@/lib/analytics";
@@ -98,6 +99,9 @@ function PaidView({
 
   useEffect(() => {
     if (qrCodeDataUrl) track("qr_code_viewed", {});
+    // Compra concluída: encerra a sessão do rascunho para que "criar outra
+    // cartinha" comece do zero (a carta atual já está publicada).
+    clearSession();
   }, [qrCodeDataUrl]);
 
   async function copy() {

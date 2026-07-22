@@ -65,10 +65,16 @@ export function CreateFlow() {
     if (existing) {
       try {
         const { cart: loaded } = await fetchCart(existing.cartId, existing.editToken);
-        lastSavedSnapshot.current = JSON.stringify(buildPatch(loaded));
-        setSession(existing);
-        setCart(loaded);
-        return;
+        // Só retoma se a carta ainda for editável. Se já foi publicada/paga
+        // (ex.: um teste ou compra anterior), descarta a sessão e começa uma
+        // nova — evita o erro "Esta carta já foi processada" no checkout.
+        if (loaded.status === "DRAFT" || loaded.status === "AWAITING_PAYMENT") {
+          lastSavedSnapshot.current = JSON.stringify(buildPatch(loaded));
+          setSession(existing);
+          setCart(loaded);
+          return;
+        }
+        clearSession();
       } catch {
         clearSession(); // token inválido ou carta não encontrada: recomeça
       }
