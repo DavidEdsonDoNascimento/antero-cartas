@@ -1,26 +1,159 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Antero Cartas — Design tokens
+   Paleta e tipografia centralizadas. Fáceis de trocar por configuração.
+   ========================================================================== */
+@theme {
+  /* Cores da marca */
+  --color-vinho: #681d35;
+  --color-vinho-deep: #4e1528;
+  --color-creme: #fff9f4;
+  --color-creme-dark: #f6ece3;
+  --color-rosa: #d98c9f;
+  --color-rosa-soft: #f3dfe4;
+  --color-dourado: #c6a15b;
+  --color-dourado-soft: #e6d3a8;
+  --color-grafite: #211d1e;
+  --color-branco: #ffffff;
+
+  /* Tipografia (fontes carregadas em layout.tsx via next/font) */
+  --font-serif: var(--font-playfair), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+  --font-script: var(--font-dancing), "Segoe Script", cursive;
+
+  /* Raios e sombras */
+  --radius-soft: 0.875rem;
+  --radius-card: 1.25rem;
+
+  /* Animações */
+  --ease-emotional: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: var(--color-creme);
+  --foreground: var(--color-grafite);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Títulos usam a serifada elegante por padrão */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-serif);
+}
+
+/* Foco acessível e visível */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-dourado);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ==========================================================================
+   Papel pautado da carta (recriação original — não copia a referência)
+   ========================================================================== */
+.paper-lines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 33px,
+    color-mix(in srgb, currentColor 16%, transparent) 33px,
+    color-mix(in srgb, currentColor 16%, transparent) 34px
+  );
+  background-position: 0 6px;
+}
+
+/* Papel pontilhado (tema Delicado) */
+.paper-dots {
+  background-image: radial-gradient(
+    color-mix(in srgb, currentColor 14%, transparent) 1.2px,
+    transparent 1.2px
+  );
+  background-size: 18px 18px;
+  background-position: 4px 8px;
+}
+
+/* Fita adesiva das fotos */
+.tape {
+  background: color-mix(in srgb, var(--color-dourado-soft) 70%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* ==========================================================================
+   Animação do envelope
+   ========================================================================== */
+@keyframes flap-open {
+  from {
+    transform: rotateX(0deg);
+  }
+  to {
+    transform: rotateX(180deg);
+  }
+}
+
+@keyframes letter-rise {
+  0% {
+    transform: translateY(40%) scale(0.96);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes gentle-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.6s var(--ease-emotional) both;
+}
+
+.animate-float {
+  animation: gentle-float 3.2s ease-in-out infinite;
+}
+
+/* Respeita quem prefere menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

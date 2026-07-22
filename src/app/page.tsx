@@ -1,65 +1,146 @@
-import Image from "next/image";
+import Link from "next/link";
+import { positioning } from "@/config/site";
+import { Header } from "@/components/landing/Header";
+import { DemoSection } from "@/components/landing/DemoSection";
+import { Faq } from "@/components/landing/Faq";
+import { TrackView } from "@/components/analytics/TrackView";
+import {
+  Benefits,
+  FinalCta,
+  Footer,
+  ForWhom,
+  Guarantee,
+  HowItWorks,
+  Plans,
+  SectionHeading,
+  Testimonials,
+} from "@/components/landing/Sections";
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <>
+      <TrackView event="landing_viewed" />
+      <Header />
+
+      <main>
+        {/* Hero */}
+        <section className="relative overflow-hidden">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-14 lg:grid-cols-2 lg:py-20">
+            <div className="text-center lg:text-left">
+              <h1 className="text-4xl font-bold leading-tight text-grafite sm:text-5xl">
+                {positioning.heroTitle}{" "}
+                <span className="text-vinho">{positioning.heroHighlight}</span>
+              </h1>
+              <p className="mx-auto mt-5 max-w-lg text-lg text-grafite/70 lg:mx-0">
+                {positioning.heroSubtitle}
+              </p>
+              <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:justify-start">
+                <Link
+                  href="/criar"
+                  className="w-full rounded-full bg-vinho px-8 py-4 text-center text-base font-semibold text-creme shadow-lg transition hover:bg-vinho-deep sm:w-auto"
+                >
+                  {positioning.heroCta} →
+                </Link>
+                <Link
+                  href="/demonstracao"
+                  className="w-full rounded-full border border-vinho px-8 py-4 text-center text-base font-semibold text-vinho transition hover:bg-vinho hover:text-creme sm:w-auto"
+                >
+                  Ver exemplo
+                </Link>
+              </div>
+              <p className="mt-4 text-sm text-grafite/50">
+                Sem instalar aplicativo · Sem cadastro · Pronta em ~3 minutos
+              </p>
+            </div>
+
+            <div className="flex justify-center">
+              <DemoSection />
+            </div>
+          </div>
+        </section>
+
+        {/* Como funciona */}
+        <section id="como-funciona" className="bg-creme-dark/40 py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading
+              eyebrow="Como funciona"
+              title="Em três passos simples"
+              subtitle="Do primeiro clique ao envio, sem complicação."
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+            <HowItWorks />
+          </div>
+        </section>
+
+        {/* Para quem é */}
+        <section id="para-quem" className="py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading
+              eyebrow="Para quem é"
+              title="Uma lembrança para cada pessoa especial"
+              subtitle="Namorados, família, amigos e todas as ocasiões que merecem ser lembradas."
+            />
+            <ForWhom />
+          </div>
+        </section>
+
+        {/* Demonstração */}
+        <section className="bg-creme-dark/40 py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading
+              eyebrow="Demonstração"
+              title="Veja o envelope abrir"
+              subtitle="Clique no envelope abaixo e veja como a pessoa vai receber a sua cartinha."
+            />
+            <DemoSection />
+          </div>
+        </section>
+
+        {/* Benefícios */}
+        <section className="py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading eyebrow="Benefícios" title="Tudo o que sua cartinha tem" />
+            <Benefits />
+          </div>
+        </section>
+
+        {/* Planos */}
+        <section id="planos" className="bg-creme-dark/40 py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading
+              eyebrow="Planos"
+              title="Escolha por quanto tempo ela dura"
+              subtitle="Pagamento único por cartinha. Sem mensalidade."
+            />
+            <Plans />
+            <div className="mt-8">
+              <Guarantee />
+            </div>
+          </div>
+        </section>
+
+        {/* Depoimentos */}
+        <section className="py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading eyebrow="Depoimentos" title="Quem já surpreendeu alguém" />
+            <Testimonials />
+          </div>
+        </section>
+
+        {/* Dúvidas */}
+        <section id="duvidas" className="bg-creme-dark/40 py-16">
+          <div className="mx-auto max-w-6xl px-4">
+            <SectionHeading eyebrow="Dúvidas frequentes" title="Perguntas que sempre chegam" />
+            <Faq />
+          </div>
+        </section>
+
+        {/* CTA final */}
+        <section className="px-4 py-16">
+          <FinalCta />
+        </section>
       </main>
-    </div>
+
+      <Footer />
+    </>
   );
 }

@@ -856,4 +856,12 @@ Ao terminar cada etapa:
 - informe o que ainda está mockado;
 - informe como executar e testar.
 
+Antes de instalar qualquer biblioteca:
+
+- analise o package.json;
+- verifique as dependências já existentes;
+- instale somente as necessárias para a etapa atual;
+- evite instalar bibliotecas que serão utilizadas apenas em fases futuras;
+- explique por que cada nova dependência está sendo adicionada.
+
 Comece agora pela leitura do projeto e pela criação do plano da Fase 1.
