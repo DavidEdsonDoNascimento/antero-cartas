@@ -65,3 +65,8 @@ export function youTubeEmbedUrl(
 export function youTubeThumbnail(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
+
+/** URL canônica do vídeo (para salvar e para "Ver no YouTube"). */
+export function youTubeWatchUrl(videoId: string): string {
+  return `https://www.youtube.com/watch?v=${videoId}`;
+}

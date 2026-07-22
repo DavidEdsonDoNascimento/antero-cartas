@@ -1,52 +1,25 @@
 /**
- * Persistência local da Fase 1 (sem backend).
- * - Rascunho em DUAS camadas:
- *   1) texto/config em DRAFT_KEY (sempre salvo, é leve);
- *   2) fotos comprimidas em DRAFT_MEDIA_KEY (best-effort — se estourar a cota
- *      do localStorage, o texto continua salvo e as fotos apenas não persistem).
- *   Assim a ordem escolhida das fotos é mantida no autosave e restaurada ao
- *   atualizar a página, sem arriscar perder o texto (ver docs/0004 D12).
- * - Carta publicada: salva por slug, já com fotos comprimidas, para permitir
- *   abrir /c/[slug] localmente na demonstração.
- *
- * Na Fase 2 estas funções serão substituídas por chamadas de API + Prisma,
- * mantendo a mesma forma de dados (ver lib/types.ts).
+ * Rascunho local LEGADO (Fase 1, antes do backend).
+ * A partir da Fase 2 o backend é a fonte da verdade (ver lib/api.ts e
+ * lib/cartSession.ts). Este módulo continua existindo para:
+ * - detectar um rascunho antigo no primeiro carregamento e migrá-lo
+ *   (ver CreateFlow.tsx);
+ * - servir como cache de recuperação leve (texto apenas, sem fotos) caso o
+ *   backend fique temporariamente indisponível durante a criação.
  */
 
 import type { Cart, CartMedia } from "@/lib/types";
-import { generateId } from "@/lib/slug";
-import { DEFAULT_THEME } from "@/content/themes";
+import { migrateMusic } from "@/lib/music";
+
+/** Migra o formato antigo de música ({musicUrl, musicVideoId}) em memória. */
+function migrateCart(cart: Cart): Cart {
+  cart.media = cart.media ?? [];
+  cart.music = migrateMusic(cart as unknown as Record<string, unknown>);
+  return cart;
+}
 
 const DRAFT_KEY = "antero:draft";
 const DRAFT_MEDIA_KEY = "antero:draft:media";
-const CARD_PREFIX = "antero:card:";
-
-export function createEmptyCart(): Cart {
-  const now = new Date().toISOString();
-  return {
-    id: generateId("cart"),
-    slug: null,
-    status: "DRAFT",
-    recipientType: null,
-    recipientName: "",
-    occasion: null,
-    title: "",
-    message: "",
-    senderName: "",
-    signature: "",
-    theme: DEFAULT_THEME,
-    musicUrl: null,
-    musicVideoId: null,
-    relationshipStartDate: null,
-    showRelationshipCounter: false,
-    planType: null,
-    media: [],
-    expiresAt: null,
-    publishedAt: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -55,26 +28,11 @@ function isBrowser(): boolean {
 /** Salva o rascunho: texto sempre; fotos em chave separada, best-effort. */
 export function saveDraft(cart: Cart): void {
   if (!isBrowser()) return;
-  // 1) Texto/config — leve, deve sempre caber.
   try {
     const light: Cart = { ...cart, media: [], updatedAt: new Date().toISOString() };
     localStorage.setItem(DRAFT_KEY, JSON.stringify(light));
   } catch {
     // Silencioso: quota cheia ou modo privado não deve quebrar a criação.
-  }
-  // 2) Fotos — se não couberem, remove a chave para não restaurar dados parciais.
-  try {
-    if (cart.media.length > 0) {
-      localStorage.setItem(DRAFT_MEDIA_KEY, JSON.stringify(cart.media));
-    } else {
-      localStorage.removeItem(DRAFT_MEDIA_KEY);
-    }
-  } catch {
-    try {
-      localStorage.removeItem(DRAFT_MEDIA_KEY);
-    } catch {
-      /* noop */
-    }
   }
 }
 
@@ -90,7 +48,7 @@ export function loadDraft(): Cart | null {
     } catch {
       cart.media = [];
     }
-    return cart;
+    return migrateCart(cart);
   } catch {
     return null;
   }
@@ -106,23 +64,13 @@ export function clearDraft(): void {
   }
 }
 
-/** "Publica" localmente: grava a carta completa por slug e retorna o slug. */
-export function savePublishedCart(cart: Cart): void {
-  if (!isBrowser() || !cart.slug) return;
-  try {
-    localStorage.setItem(CARD_PREFIX + cart.slug, JSON.stringify(cart));
-  } catch {
-    /* noop */
-  }
-}
-
-export function loadPublishedCart(slug: string): Cart | null {
-  if (!isBrowser()) return null;
-  try {
-    const raw = localStorage.getItem(CARD_PREFIX + slug);
-    if (!raw) return null;
-    return JSON.parse(raw) as Cart;
-  } catch {
-    return null;
-  }
+/** Um rascunho antigo só vale migrar se tiver conteúdo real. */
+export function hasMeaningfulContent(cart: Cart): boolean {
+  return Boolean(
+    cart.recipientType ||
+      cart.title.trim() ||
+      cart.message.trim() ||
+      cart.senderName.trim() ||
+      cart.media.length > 0,
+  );
 }

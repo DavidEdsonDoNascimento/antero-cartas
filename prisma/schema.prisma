@@ -1,0 +1,157 @@
+// Antero Cartas — schema Fase 2
+// Gerador prisma-client (Prisma 7) com saída em src/generated/prisma.
+// A URL do banco vem de env (ver .env.local / prisma.config.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  // Na Prisma 7 as URLs de conexão ficam em prisma.config.ts, não aqui.
+  provider = "postgresql"
+}
+
+enum CartStatus {
+  DRAFT
+  AWAITING_PAYMENT
+  PAID
+  PUBLISHED
+  EXPIRED
+  CANCELLED
+}
+
+enum PlanType {
+  LIMITED
+  PERMANENT
+}
+
+enum MusicSource {
+  SEARCH
+  MANUAL
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  PIX
+  CARD
+  MOCK
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Cart {
+  id       String     @id @default(cuid())
+  /// Hash do token de edição (nunca exposto). Autoriza edição do rascunho.
+  editTokenHash String
+  slug     String?    @unique
+  status   CartStatus @default(DRAFT)
+
+  recipientType String?
+  recipientName String  @default("")
+  occasion      String?
+  title         String  @default("")
+  message       String  @default("")
+  senderName    String  @default("")
+  signature     String  @default("")
+  theme         String  @default("romantico")
+
+  // Música (apenas metadados mínimos da faixa escolhida)
+  musicVideoId      String?
+  musicUrl          String?
+  musicTitle        String?
+  musicChannelTitle String?
+  musicThumbnailUrl String?
+  musicSource       MusicSource?
+
+  relationshipStartDate   DateTime?
+  showRelationshipCounter Boolean   @default(false)
+
+  planType    PlanType?
+  expiresAt   DateTime?
+  publishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  media  CartMedia[]
+  orders Order[]
+
+  @@index([status])
+}
+
+model CartMedia {
+  id        String @id @default(cuid())
+  cartId    String
+  cart      Cart   @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  type      String @default("photo")
+  url       String
+  storageKey String
+  mimeType  String
+  sizeBytes Int
+  width     Int?
+  height    Int?
+  position  Int
+  createdAt DateTime @default(now())
+
+  @@index([cartId])
+}
+
+model Order {
+  id       String @id @default(cuid())
+  cartId   String
+  cart     Cart   @relation(fields: [cartId], references: [id])
+
+  customerName     String
+  customerEmail    String
+  customerPhone    String?
+  customerDocument String?
+
+  planType      PlanType
+  amount        Int           // em centavos, definido pelo servidor
+  currency      String        @default("BRL")
+  paymentMethod PaymentMethod @default(MOCK)
+  provider      String        @default("mock")
+  providerPaymentId String?   @unique
+  status        OrderStatus   @default(PENDING)
+  paidAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  emailDeliveries EmailDelivery[]
+
+  @@index([cartId])
+  @@index([status])
+}
+
+model EmailDelivery {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type      String
+  recipient String
+  status    EmailStatus @default(PENDING)
+  /// Conteúdo do e-mail (dev). Não é log comum; contém dados do comprador.
+  payload   String
+  attempts  Int         @default(0)
+  sentAt    DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  // Idempotência: no máximo um e-mail de cada tipo por pedido.
+  @@unique([orderId, type])
+  @@index([orderId])
+}

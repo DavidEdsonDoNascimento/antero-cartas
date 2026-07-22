@@ -33,14 +33,42 @@ Consolidação da experiência antes da persistência (sem backend).
 - [x] Temas visualmente distintos dirigidos por tokens
 - [x] Revisão do fluxo de 4 etapas e casos-limite (1..6 fotos, msg longa, mobile, reduced-motion)
 
-## Fase 2 — Persistência e infraestrutura mínima
-- [ ] Banco de dados (Prisma + PostgreSQL) com o modelo de `lib/types.ts`
-- [ ] Rascunho no backend + rota de criação/atualização
-- [ ] Upload seguro para storage S3-compatible (substitui data URL local)
-- [ ] Carta pública servida pelo backend por slug
-- [ ] Geração de QR Code
-- [ ] `MockPaymentProvider` + webhook idempotente + estados de pagamento
-- [ ] `EmailProvider` mock + página de sucesso completa
+## Fase 1.2 — Pesquisa e seleção de música no YouTube ✅
+Melhor escolha de música na criação (sem backend/persistência definitiva).
+
+- [x] Busca por música/artista via rota server-side `/api/youtube/search`
+- [x] Modos **mock** (sem chave) / **real** (YouTube Data API v3) / **disabled**
+- [x] Chave `YOUTUBE_API_KEY` **somente no servidor** (nunca no bundle do cliente)
+- [x] Debounce, mínimo de caracteres, dedupe, `AbortController`, cache em memória com TTL
+- [x] Resultados com thumbnail/título/canal, selecionar, ver no YouTube, prévia
+- [x] Colar link mantido como alternativa (mesma estrutura de dados `SelectedMusic`)
+- [x] Migração de rascunhos antigos (`musicUrl`/`musicVideoId` → `music`)
+- [x] Analytics de música, tratamento de indisponibilidade, acessibilidade e mobile
+- [x] Testes (Vitest) das funções puras e do serviço de busca
+
+## Fase 2 — Persistência e infraestrutura mínima ✅
+Substitui as limitações locais por uma infraestrutura mínima: criar, persistir,
+publicar e abrir uma carta em qualquer dispositivo. **Sem pagamento real.**
+
+- [x] Banco de dados PostgreSQL + Prisma 7 (driver adapter `@prisma/adapter-pg`)
+- [x] Modelo `Cart`/`CartMedia`/`Order`/`EmailDelivery` com enums e índices
+- [x] Rascunho no backend, sem login, autorizado por **token de edição** (hash SHA-256)
+- [x] Migração best-effort do rascunho local (Fase 1) para o backend
+- [x] API de rascunho (`/api/carts*`) com validação central via Zod
+- [x] Autosave no backend: debounce, "Salvando/Salvo/erro", descarte de respostas
+      antigas, cache local de recuperação
+- [x] Upload real de fotos (`StorageProvider`, implementação em disco local),
+      validação de magic bytes também no servidor, remoção e reordenação persistidas
+- [x] Persistência da música (`SelectedMusic` achatado no banco), sem guardar
+      resultados de busca nem o termo pesquisado
+- [x] `Order` + `PaymentProvider` mock, preço calculado **no servidor**
+- [x] Confirmação de pagamento mock **idempotente** (transação atômica: pedido +
+      publicação + slug + expiração)
+- [x] Rota pública `/c/[slug]` servida pelo backend (Server Component), com `noindex`
+- [x] QR Code (biblioteca `qrcode`) gerado sob demanda, nunca bloqueia a publicação
+- [x] `EmailProvider` mock com outbox (`EmailDelivery`), único envio por pedido
+- [x] Páginas `/checkout/[cartId]` e `/pedido/[orderId]/sucesso`
+- [x] Testes unitários (funções puras) + testes de integração com banco real (opt-in)
 
 ## Fase 3 — Venda real
 - [ ] `RealPaymentProvider` (Pix e cartão) atrás da interface `PaymentProvider`
@@ -56,9 +84,12 @@ premium, agendamento, senha, vídeo, i18n, edição pós-compra, recuperação d
 carrinho, campanhas sazonais.
 
 ## Critérios de aceite do MVP
-Ver seção 22 da task. Estado atual da Fase 1 cobre: mobile+desktop, sem cadastro,
-criação em 4 etapas, autosave, preview fiel, até 6 fotos em carrossel, validação de YouTube,
-contador opcional, seleção de plano, conclusão em modo mock, publicação local,
-link exclusivo, envelope por interação, música após abertura, botão de WhatsApp,
-estados de loading/erro/vazio, sem números/urgência falsos e sem cópia da referência.
-Pendentes para Fase 2: QR Code e envio real por e-mail.
+Ver seção 22 da task 001 e seção 39 da task 004 (Fase 2). Com a Fase 2, o produto
+cobre: mobile+desktop, sem cadastro, criação em 4 etapas com autosave no backend,
+preview fiel, até 6 fotos em carrossel com upload real, música persistida, seleção
+de plano com preço definido pelo servidor, pedido + confirmação mock idempotente,
+publicação real com slug seguro e expiração calculada, carta pública aberta em
+qualquer navegador/dispositivo com `noindex`, QR Code, e-mail mock (outbox) e
+botão de WhatsApp com o link público real.
+Pendentes para Fase 3: pagamento real (Pix/cartão), webhook de provedor, e-mail
+transacional real.

@@ -6,6 +6,7 @@ import { getTheme } from "@/content/themes";
 import { CardPreview } from "@/components/card/CardPreview";
 import { youTubeEmbedUrl } from "@/lib/youtube";
 import { whatsappShareUrl } from "@/lib/whatsapp";
+import type { SelectedMusic } from "@/lib/types";
 import { track } from "@/lib/analytics";
 
 /**
@@ -20,7 +21,7 @@ export function CardExperience({ cart, shareUrl }: { cart: Cart; shareUrl: strin
 
   function handleOpen() {
     setOpened(true);
-    track("cart_opened", { theme: cart.theme, hasMusic: !!cart.musicVideoId });
+    track("cart_opened", { theme: cart.theme, hasMusic: !!cart.music });
   }
 
   return (
@@ -96,40 +97,13 @@ function ClosedEnvelope({
 }
 
 function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
-  // Tenta tocar após a abertura (dentro do gesto do usuário). Se o navegador
-  // bloquear, o controle abaixo permite iniciar manualmente — sem erro visual.
-  const [musicOn, setMusicOn] = useState(true);
   const shareText = `Preparei uma cartinha especial para você 💌 ${shareUrl}`;
 
   return (
     <div className="w-full max-w-md animate-fade-up">
       <CardPreview cart={cart} />
 
-      {cart.musicVideoId && (
-        <div className="mt-4 rounded-xl bg-black/25 p-3">
-          <div className="flex items-center justify-between gap-3 text-xs text-white/85">
-            <span className="flex items-center gap-1.5">🎵 Música da cartinha</span>
-            <button
-              onClick={() => setMusicOn((v) => !v)}
-              aria-pressed={musicOn}
-              className="rounded-full bg-white/15 px-3 py-1 font-medium text-white transition hover:bg-white/25"
-            >
-              {musicOn ? "Pausar música" : "▶ Tocar música"}
-            </button>
-          </div>
-          {musicOn && (
-            <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg">
-              <iframe
-                title="Música da cartinha"
-                src={youTubeEmbedUrl(cart.musicVideoId, { autoplay: true })}
-                allow="autoplay; encrypted-media; picture-in-picture"
-                allowFullScreen
-                className="h-full w-full"
-              />
-            </div>
-          )}
-        </div>
-      )}
+      {cart.music && <OpenCardMusic music={cart.music} />}
 
       <div className="mt-5 flex flex-col gap-2">
         <a
@@ -142,6 +116,53 @@ function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
           Compartilhar no WhatsApp
         </a>
       </div>
+    </div>
+  );
+}
+
+function OpenCardMusic({ music }: { music: SelectedMusic }) {
+  // Tenta tocar logo após a abertura (dentro do gesto do usuário). Se o
+  // navegador bloquear, o próprio player mostra o botão de play e o controle
+  // abaixo permite reiniciar — sem gerar erro visual.
+  const [playing, setPlaying] = useState(true);
+
+  return (
+    <div className="mt-4 rounded-xl bg-black/25 p-3">
+      <div className="flex items-center justify-between gap-3 text-xs text-white/85">
+        <span className="min-w-0 truncate">
+          🎵 {music.title ?? "Música da cartinha"}
+          {music.channelTitle ? ` · ${music.channelTitle}` : ""}
+        </span>
+        <button
+          onClick={() => setPlaying((v) => !v)}
+          aria-pressed={playing}
+          className="shrink-0 rounded-full bg-white/15 px-3 py-1 font-medium text-white transition hover:bg-white/25"
+        >
+          {playing ? "Pausar música" : "▶ Tocar música"}
+        </button>
+      </div>
+      {playing && (
+        <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg">
+          <iframe
+            title="Música da cartinha"
+            src={youTubeEmbedUrl(music.videoId, { autoplay: true })}
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowFullScreen
+            className="h-full w-full"
+          />
+        </div>
+      )}
+      <p className="mt-2 text-center text-[11px] text-white/55">
+        A reprodução depende da disponibilidade do vídeo no YouTube.{" "}
+        <a
+          href={music.youtubeUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline"
+        >
+          Ver no YouTube
+        </a>
+      </p>
     </div>
   );
 }

@@ -41,6 +41,19 @@ export interface CartMedia {
   createdAt: string;
 }
 
+/**
+ * Música escolhida — metadados mínimos, sem guardar a resposta bruta da API.
+ * `source` distingue busca (YouTube Data API) de link colado manualmente.
+ */
+export interface SelectedMusic {
+  videoId: string;
+  youtubeUrl: string;
+  title?: string;
+  channelTitle?: string;
+  thumbnailUrl?: string;
+  source: "search" | "manual";
+}
+
 export interface Cart {
   id: string;
   slug: string | null;
@@ -53,8 +66,7 @@ export interface Cart {
   senderName: string;
   signature: string;
   theme: ThemeId;
-  musicUrl: string | null;
-  musicVideoId: string | null;
+  music: SelectedMusic | null;
   relationshipStartDate: string | null;
   showRelationshipCounter: boolean;
   planType: PlanType | null;

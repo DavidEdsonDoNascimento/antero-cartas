@@ -66,6 +66,7 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
               accent={theme.accent}
               frame={theme.photoFrame}
               tilt={theme.tilt}
+              autoAdvance={!live}
             />
           </div>
         )}
@@ -118,20 +119,26 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
         )}
 
         {/* Indicador de música (miniatura — sem autoplay no preview) */}
-        {cart.musicVideoId && (
+        {cart.music && (
           <div className="mt-6 flex items-center gap-3 rounded-lg bg-black/5 p-2">
             <Image
-              src={youTubeThumbnail(cart.musicVideoId)}
+              src={cart.music.thumbnailUrl ?? youTubeThumbnail(cart.music.videoId)}
               alt="Capa da música escolhida"
               width={72}
               height={54}
-              className="h-12 w-16 rounded object-cover"
+              className="h-12 w-16 shrink-0 rounded object-cover"
               unoptimized
             />
-            <div className="text-xs">
-              <p className="font-medium">🎵 Música adicionada</p>
-              <p className="opacity-60">
-                {live ? "Toca quando o envelope abrir" : "Toque para ouvir"}
+            <div className="min-w-0 text-xs">
+              <p className="truncate font-medium">
+                🎵 {cart.music.title ?? "Música adicionada"}
+              </p>
+              <p className="truncate opacity-60">
+                {cart.music.channelTitle
+                  ? cart.music.channelTitle
+                  : live
+                    ? "Toca quando o envelope abrir"
+                    : "Toque para ouvir"}
               </p>
             </div>
           </div>

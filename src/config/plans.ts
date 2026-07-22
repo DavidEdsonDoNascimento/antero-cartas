@@ -16,17 +16,22 @@ function readDays(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** Preços armazenados em centavos para evitar erros de ponto flutuante. */
+/**
+ * Preços em centavos. No servidor o preço é autoritativo (nunca confiar no
+ * navegador): usamos as variáveis não-públicas primeiro e caímos para as
+ * NEXT_PUBLIC_ (necessárias para exibição). Ambas são configuráveis.
+ */
 export const PLAN_LIMITED_PRICE = readCents(
-  process.env.NEXT_PUBLIC_PLAN_LIMITED_PRICE,
+  process.env.PLAN_LIMITED_PRICE ?? process.env.NEXT_PUBLIC_PLAN_LIMITED_PRICE,
   1890,
 );
 export const PLAN_PERMANENT_PRICE = readCents(
-  process.env.NEXT_PUBLIC_PLAN_PERMANENT_PRICE,
+  process.env.PLAN_PERMANENT_PRICE ?? process.env.NEXT_PUBLIC_PLAN_PERMANENT_PRICE,
   4890,
 );
 export const PLAN_LIMITED_DURATION_DAYS = readDays(
-  process.env.NEXT_PUBLIC_PLAN_LIMITED_DURATION_DAYS,
+  process.env.PLAN_LIMITED_DURATION_DAYS ??
+    process.env.NEXT_PUBLIC_PLAN_LIMITED_DURATION_DAYS,
   365,
 );
 

@@ -21,7 +21,7 @@ export const faq: FaqItem[] = [
   },
   {
     q: "Consigo colocar fotos e música?",
-    a: `Sim. Você pode adicionar até ${MAX_CART_PHOTOS} fotos e uma música por link do YouTube. A música começa a tocar quando a pessoa abre o envelope.`,
+    a: `Sim. Você pode adicionar até ${MAX_CART_PHOTOS} fotos e uma música: pesquise pelo nome da música ou do artista, ou cole o link do YouTube. A música começa a tocar quando a pessoa abre o envelope. A reprodução depende da disponibilidade do vídeo no YouTube.`,
   },
   {
     q: "Como a pessoa recebe a cartinha?",

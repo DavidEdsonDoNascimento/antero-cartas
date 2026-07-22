@@ -86,7 +86,7 @@ export function StepSign({ cart, update, goToStep }: Props) {
 function extrasSummary(cart: Cart): string {
   const parts: string[] = [];
   if (cart.media.length) parts.push(`${cart.media.length} foto(s)`);
-  if (cart.musicVideoId) parts.push("música");
+  if (cart.music) parts.push("música");
   if (cart.showRelationshipCounter && cart.relationshipStartDate) parts.push("contador");
   return parts.length ? parts.join(", ") : "nenhum";
 }

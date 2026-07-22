@@ -1,16 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Cart } from "@/lib/types";
-import {
-  createEmptyCart,
-  loadDraft,
-  saveDraft,
-  savePublishedCart,
-} from "@/lib/storage";
-import { generateSlug } from "@/lib/slug";
-import { getPlan } from "@/config/plans";
+import { loadDraft, saveDraft, clearDraft, hasMeaningfulContent } from "@/lib/storage";
+import { loadSession, saveSession, clearSession, type CartSession } from "@/lib/cartSession";
+import { createDraft, fetchCart, patchCart, uploadPhoto, type CartPatch } from "@/lib/api";
 import { track } from "@/lib/analytics";
 import { site } from "@/config/site";
 import { CardPreview } from "@/components/card/CardPreview";
@@ -20,45 +16,161 @@ import { StepMessage } from "./StepMessage";
 import { StepPersonalize } from "./StepPersonalize";
 import { StepSign } from "./StepSign";
 import { StepPlan } from "./StepPlan";
-import { Success } from "./Success";
 import { GhostButton, PrimaryButton } from "./ui";
 
-type View = 1 | 2 | 3 | 4 | "plan" | "success";
+type View = 1 | 2 | 3 | 4 | "plan";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+/** Campos editáveis persistidos via autosave (fotos usam endpoints próprios). */
+function buildPatch(cart: Cart): CartPatch {
+  return {
+    recipientType: cart.recipientType,
+    recipientName: cart.recipientName,
+    occasion: cart.occasion,
+    title: cart.title,
+    message: cart.message,
+    senderName: cart.senderName,
+    signature: cart.signature,
+    theme: cart.theme,
+    music: cart.music,
+    relationshipStartDate: cart.relationshipStartDate,
+    showRelationshipCounter: cart.showRelationshipCounter,
+    planType: cart.planType,
+  };
+}
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
 
 export function CreateFlow() {
+  const router = useRouter();
   const [cart, setCart] = useState<Cart | null>(null);
+  const [session, setSession] = useState<CartSession | null>(null);
   const [view, setView] = useState<View>(1);
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [initError, setInitError] = useState(false);
+  const [photoMigrationNotice, setPhotoMigrationNotice] = useState(false);
   const [showMobilePreview, setShowMobilePreview] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Carrega o rascunho da sessão (fotos ficam em memória; texto é recuperado).
-  // A leitura de localStorage só existe no cliente, após a montagem.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCart(loadDraft() ?? createEmptyCart());
-    track("create_started");
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef(0);
+  const lastSavedSnapshot = useRef<string>("");
+
+  // --- Inicialização: retoma sessão existente ou migra rascunho local -------
+  const init = useCallback(async () => {
+    setInitError(false);
+    const existing = loadSession();
+    if (existing) {
+      try {
+        const { cart: loaded } = await fetchCart(existing.cartId, existing.editToken);
+        lastSavedSnapshot.current = JSON.stringify(buildPatch(loaded));
+        setSession(existing);
+        setCart(loaded);
+        return;
+      } catch {
+        clearSession(); // token inválido ou carta não encontrada: recomeça
+      }
+    }
+
+    const legacy = loadDraft();
+    const shouldMigrate = legacy && hasMeaningfulContent(legacy);
+    const initialPatch: CartPatch | undefined = shouldMigrate
+      ? {
+          recipientType: legacy.recipientType,
+          recipientName: legacy.recipientName,
+          occasion: legacy.occasion,
+          title: legacy.title,
+          message: legacy.message,
+          senderName: legacy.senderName,
+          signature: legacy.signature,
+          theme: legacy.theme,
+          music: legacy.music,
+          relationshipStartDate: legacy.relationshipStartDate,
+          showRelationshipCounter: legacy.showRelationshipCounter,
+          planType: legacy.planType,
+        }
+      : undefined;
+
+    try {
+      const { cart: created, editToken } = await createDraft(initialPatch);
+      const newSession: CartSession = { cartId: created.id, editToken };
+      saveSession(newSession);
+      setSession(newSession);
+      track("draft_created");
+
+      let finalCart = created;
+      if (shouldMigrate && legacy!.media.length > 0) {
+        let anyFailed = false;
+        for (const m of legacy!.media) {
+          try {
+            const blob = await dataUrlToBlob(m.url);
+            const res = await uploadPhoto(newSession.cartId, newSession.editToken, blob);
+            finalCart = res.cart;
+          } catch {
+            anyFailed = true;
+          }
+        }
+        if (anyFailed) setPhotoMigrationNotice(true);
+      }
+      lastSavedSnapshot.current = JSON.stringify(buildPatch(finalCart));
+      setCart(finalCart);
+      clearDraft(); // só remove o rascunho antigo depois de confirmado no backend
+    } catch {
+      setInitError(true);
+    }
   }, []);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    init();
+  }, [init]);
+
   const update = useCallback((patch: Partial<Cart>) => {
-    setSaved(false); // marca "não salvo" no evento de edição (fora do efeito)
+    setSaveStatus("saving");
     setCart((prev) => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
-  // Autosave com debounce: o setState acontece no callback assíncrono do timer.
+  // --- Autosave com debounce, descarte de respostas antigas e retry simples --
   useEffect(() => {
-    if (!cart) return;
+    if (!cart || !session) return;
+    const patch = buildPatch(cart);
+    const snapshot = JSON.stringify(patch);
+    if (snapshot === lastSavedSnapshot.current) return; // nada mudou
+
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      saveDraft(cart);
-      setSaved(true);
+    saveTimer.current = setTimeout(async () => {
+      saveDraft(cart); // cache local de recuperação (não é a fonte da verdade)
+
+      const seq = ++saveSeqRef.current;
+      try {
+        await patchCart(session.cartId, session.editToken, patch);
+        lastSavedSnapshot.current = snapshot;
+        if (seq === saveSeqRef.current) setSaveStatus("saved");
+      } catch {
+        if (seq === saveSeqRef.current) setSaveStatus("error");
+      }
     }, 700);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [cart]);
+  }, [cart, session]);
 
-  if (!cart) {
+  if (initError) {
+    return (
+      <div className="mx-auto max-w-md px-4 py-24 text-center">
+        <p className="text-grafite/70">
+          Não foi possível iniciar sua cartinha agora. Verifique sua conexão e tente novamente.
+        </p>
+        <div className="mt-4">
+          <PrimaryButton onClick={init}>Tentar novamente</PrimaryButton>
+        </div>
+      </div>
+    );
+  }
+
+  if (!cart || !session) {
     return <div className="py-20 text-center text-grafite/50">Carregando…</div>;
   }
 
@@ -87,35 +199,19 @@ export function CreateFlow() {
     else if (view === "plan") setView(4);
   }
 
-  function publish() {
-    const plan = getPlan(cart!.planType!);
-    const now = new Date();
-    const slug = generateSlug();
-    const expiresAt =
-      plan.durationDays != null
-        ? new Date(now.getTime() + plan.durationDays * 86400000).toISOString()
-        : null;
-    const published: Cart = {
-      ...cart!,
-      slug,
-      status: "PUBLISHED",
-      publishedAt: now.toISOString(),
-      expiresAt,
-      updatedAt: now.toISOString(),
-    };
-    track("plan_selected", { plan: plan.type });
-    savePublishedCart(published);
-    track("cart_published", { plan: plan.type });
-    setCart(published);
-    setView("success");
-  }
-
-  if (view === "success") {
-    return (
-      <div className="mx-auto max-w-2xl px-4 py-12">
-        <Success cart={cart} />
-      </div>
-    );
+  /** Persiste o plano imediatamente (sem esperar o debounce) e vai ao checkout. */
+  async function goToCheckout() {
+    if (!cart!.planType) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    try {
+      await patchCart(session!.cartId, session!.editToken, buildPatch(cart!));
+      lastSavedSnapshot.current = JSON.stringify(buildPatch(cart!));
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+    }
+    track("plan_selected", { plan: cart!.planType });
+    router.push(`/checkout/${session!.cartId}`);
   }
 
   return (
@@ -126,21 +222,41 @@ export function CreateFlow() {
           <Link href="/" className="text-sm font-medium text-vinho">
             ← {site.name}
           </Link>
-          <span
-            className={`text-xs transition ${saved ? "text-green-700" : "text-grafite/40"}`}
-          >
-            {saved ? "✓ Salvo" : "Salvando…"}
-          </span>
+          <SaveIndicator status={saveStatus} />
         </div>
+
+        {photoMigrationNotice && (
+          <div className="mb-4 rounded-lg bg-dourado/15 px-3 py-2 text-xs text-grafite/70">
+            Recuperamos o texto da sua cartinha anterior, mas algumas fotos precisam ser
+            selecionadas novamente.{" "}
+            <button
+              className="underline"
+              onClick={() => setPhotoMigrationNotice(false)}
+            >
+              Ok
+            </button>
+          </div>
+        )}
 
         {view !== "plan" && <StepIndicator current={view} />}
 
         <div className="rounded-2xl bg-white/70 p-5 shadow-sm sm:p-7">
           {view === 1 && <StepRecipient cart={cart} update={update} />}
           {view === 2 && <StepMessage cart={cart} update={update} />}
-          {view === 3 && <StepPersonalize cart={cart} update={update} />}
-          {view === 4 && <StepSign cart={cart} update={update} goToStep={(n) => setView(n as View)} />}
-          {view === "plan" && <StepPlan cart={cart} update={update} onPublish={publish} />}
+          {view === 3 && (
+            <StepPersonalize
+              cart={cart}
+              update={update}
+              session={session}
+              onCartUpdated={setCart}
+            />
+          )}
+          {view === 4 && (
+            <StepSign cart={cart} update={update} goToStep={(n) => setView(n as View)} />
+          )}
+          {view === "plan" && (
+            <StepPlan cart={cart} update={update} onContinue={goToCheckout} />
+          )}
 
           {view !== "plan" && (
             <div className="mt-7 flex items-center justify-between border-t border-rosa/20 pt-5">
@@ -204,6 +320,19 @@ export function CreateFlow() {
         </div>
       )}
     </div>
+  );
+}
+
+function SaveIndicator({ status }: { status: SaveStatus }) {
+  if (status === "error") {
+    return <span className="text-xs text-vinho">Não foi possível salvar agora</span>;
+  }
+  return (
+    <span
+      className={`text-xs transition ${status === "saved" ? "text-green-700" : "text-grafite/40"}`}
+    >
+      {status === "saved" ? "✓ Salvo" : "Salvando…"}
+    </span>
   );
 }
 

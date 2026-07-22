@@ -8,10 +8,10 @@ import { StepHeader, PrimaryButton } from "./ui";
 interface Props {
   cart: Cart;
   update: (patch: Partial<Cart>) => void;
-  onPublish: () => void;
+  onContinue: () => void;
 }
 
-export function StepPlan({ cart, update, onPublish }: Props) {
+export function StepPlan({ cart, update, onContinue }: Props) {
   return (
     <div>
       <StepHeader
@@ -74,8 +74,8 @@ export function StepPlan({ cart, update, onPublish }: Props) {
       </div>
 
       <div className="mt-5 flex justify-center">
-        <PrimaryButton onClick={onPublish} disabled={!cart.planType}>
-          Ver minha cartinha pronta ✦
+        <PrimaryButton onClick={onContinue} disabled={!cart.planType}>
+          Continuar para o pagamento →
         </PrimaryButton>
       </div>
     </div>

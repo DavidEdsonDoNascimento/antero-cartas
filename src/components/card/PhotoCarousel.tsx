@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CartMedia } from "@/lib/types";
 
 /**
@@ -16,15 +16,33 @@ export function PhotoCarousel({
   accent,
   frame = "tape",
   tilt = -1.5,
+  autoAdvance = false,
+  interval = 3000,
 }: {
   media: CartMedia[];
   accent: string;
   frame?: "tape" | "clean";
   tilt?: number;
+  /** Passa as fotos sozinho (usado na carta pronta e na demonstração). */
+  autoAdvance?: boolean;
+  /** Intervalo do auto-avanço, em ms. */
+  interval?: number;
 }) {
   const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
   const startX = useRef<number | null>(null);
   const count = media.length;
+
+  // Auto-avanço: pausa ao interagir e respeita prefers-reduced-motion.
+  useEffect(() => {
+    if (!autoAdvance || count <= 1 || paused) return;
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    const id = setInterval(() => setIndex((i) => (i + 1) % count), interval);
+    return () => clearInterval(id);
+  }, [autoAdvance, count, paused, interval]);
 
   if (count === 0) return null;
 
@@ -65,6 +83,10 @@ export function PhotoCarousel({
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
+        onPointerEnter={() => setPaused(true)}
+        onPointerLeave={() => setPaused(false)}
+        onFocus={() => setPaused(true)}
+        onBlur={() => setPaused(false)}
         className="relative mx-auto w-full max-w-[16rem] touch-pan-y select-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-current"
       >
         <div

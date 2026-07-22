@@ -1,19 +1,23 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { Cart, CartMedia, ThemeId } from "@/lib/types";
+import type { Cart, ThemeId } from "@/lib/types";
 import { themes } from "@/content/themes";
-import { MAX_CART_PHOTOS, preparePhoto, validateImageFile } from "@/lib/image";
-import { generateId } from "@/lib/slug";
-import { extractYouTubeId } from "@/lib/youtube";
-import { FieldLabel, StepHeader, TextField, Toggle } from "./ui";
+import { MAX_CART_PHOTOS, compressPhoto, validateImageFile } from "@/lib/image";
+import { uploadPhoto, removePhoto, reorderPhotos, ApiClientError } from "@/lib/api";
+import type { CartSession } from "@/lib/cartSession";
+import { track } from "@/lib/analytics";
+import { MusicPicker } from "./MusicPicker";
+import { FieldLabel, StepHeader, Toggle } from "./ui";
 
 interface Props {
   cart: Cart;
   update: (patch: Partial<Cart>) => void;
+  session: CartSession;
+  onCartUpdated: (cart: Cart) => void;
 }
 
-export function StepPersonalize({ cart, update }: Props) {
+export function StepPersonalize({ cart, update, session, onCartUpdated }: Props) {
   return (
     <div>
       <StepHeader
@@ -21,20 +25,24 @@ export function StepPersonalize({ cart, update }: Props) {
         subtitle="Tudo opcional — adicione o que quiser e siga em frente quando estiver pronto."
       />
       <div className="space-y-7">
-        <PhotosField cart={cart} update={update} />
+        <PhotosField cart={cart} session={session} onCartUpdated={onCartUpdated} />
         <CounterField cart={cart} update={update} />
-        <MusicField cart={cart} update={update} />
+        <MusicPicker cart={cart} update={update} />
         <ThemeField cart={cart} update={update} />
       </div>
     </div>
   );
 }
 
-function reindex(media: CartMedia[]): CartMedia[] {
-  return media.map((m, i) => ({ ...m, position: i }));
+function apiErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiClientError ? err.message : fallback;
 }
 
-function PhotosField({ cart, update }: Props) {
+function PhotosField({
+  cart,
+  session,
+  onCartUpdated,
+}: Pick<Props, "cart" | "session" | "onCartUpdated">) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -48,50 +56,73 @@ function PhotosField({ cart, update }: Props) {
     if (files.length > remaining) {
       setError(`Você pode adicionar no máximo ${MAX_CART_PHOTOS} fotos.`);
     }
-    const added: CartMedia[] = [];
+
     for (const file of chosen) {
-      const err = await validateImageFile(file);
-      if (err) {
-        setError(err);
+      const validationError = await validateImageFile(file);
+      if (validationError) {
+        setError(validationError);
         continue;
       }
       try {
-        const { dataUrl, storageKey } = await preparePhoto(file);
-        added.push({
-          id: generateId("media"),
-          cartId: cart.id,
-          type: "photo",
-          url: dataUrl,
-          storageKey,
-          position: cart.media.length + added.length,
-          createdAt: new Date().toISOString(),
+        const { blob, width, height } = await compressPhoto(file);
+        const res = await uploadPhoto(session.cartId, session.editToken, blob, {
+          width,
+          height,
         });
-      } catch {
-        setError("Não foi possível processar uma das imagens.");
+        onCartUpdated(res.cart);
+        track("photo_uploaded", { count: res.cart.media.length });
+      } catch (err) {
+        setError(apiErrorMessage(err, "Não foi possível enviar uma das fotos."));
       }
     }
-    if (added.length) update({ media: reindex([...cart.media, ...added]) });
     setBusy(false);
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  function remove(id: string) {
-    update({ media: reindex(cart.media.filter((m) => m.id !== id)) });
+  async function remove(id: string) {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await removePhoto(session.cartId, session.editToken, id);
+      onCartUpdated(res.cart);
+      track("photo_removed", { count: res.cart.media.length });
+    } catch (err) {
+      setError(apiErrorMessage(err, "Não foi possível remover a foto."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function persistOrder(nextIds: string[]) {
+    const previous = cart.media;
+    const optimistic = nextIds
+      .map((id, i) => {
+        const m = previous.find((p) => p.id === id);
+        return m ? { ...m, position: i } : null;
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+    onCartUpdated({ ...cart, media: optimistic });
+
+    try {
+      const res = await reorderPhotos(session.cartId, session.editToken, nextIds);
+      onCartUpdated(res.cart);
+    } catch (err) {
+      onCartUpdated({ ...cart, media: previous }); // rollback
+      setError(apiErrorMessage(err, "Não foi possível reordenar as fotos."));
+    }
   }
 
   function move(index: number, dir: -1 | 1) {
-    const next = [...cart.media];
     const target = index + dir;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    update({ media: reindex(next) });
+    if (target < 0 || target >= cart.media.length) return;
+    const ids = cart.media.map((m) => m.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    persistOrder(ids);
   }
 
   function makeCover(id: string) {
-    const item = cart.media.find((m) => m.id === id);
-    if (!item) return;
-    const rest = cart.media.filter((m) => m.id !== id);
-    update({ media: reindex([item, ...rest]) });
+    const ids = cart.media.map((m) => m.id).filter((i) => i !== id);
+    persistOrder([id, ...ids]);
   }
 
   return (
@@ -116,8 +147,9 @@ function PhotosField({ cart, update }: Props) {
                   )}
                   <button
                     onClick={() => remove(m.id)}
+                    disabled={busy}
                     aria-label={`Remover foto ${i + 1}`}
-                    className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-grafite text-xs text-white shadow"
+                    className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-grafite text-xs text-white shadow disabled:opacity-50"
                   >
                     ✕
                   </button>
@@ -125,7 +157,7 @@ function PhotosField({ cart, update }: Props) {
                 <div className="mt-1 flex items-center justify-center gap-1">
                   <button
                     onClick={() => move(i, -1)}
-                    disabled={i === 0}
+                    disabled={busy || i === 0}
                     aria-label={`Mover foto ${i + 1} para a esquerda`}
                     className="rounded px-1.5 text-sm text-grafite/60 disabled:opacity-30"
                   >
@@ -134,15 +166,16 @@ function PhotosField({ cart, update }: Props) {
                   {i !== 0 && (
                     <button
                       onClick={() => makeCover(m.id)}
+                      disabled={busy}
                       aria-label={`Definir foto ${i + 1} como capa`}
-                      className="rounded px-1.5 text-[11px] font-medium text-dourado hover:underline"
+                      className="rounded px-1.5 text-[11px] font-medium text-dourado hover:underline disabled:opacity-50"
                     >
                       capa
                     </button>
                   )}
                   <button
                     onClick={() => move(i, 1)}
-                    disabled={i === cart.media.length - 1}
+                    disabled={busy || i === cart.media.length - 1}
                     aria-label={`Mover foto ${i + 1} para a direita`}
                     className="rounded px-1.5 text-sm text-grafite/60 disabled:opacity-30"
                   >
@@ -187,7 +220,7 @@ function PhotosField({ cart, update }: Props) {
   );
 }
 
-function CounterField({ cart, update }: Props) {
+function CounterField({ cart, update }: Pick<Props, "cart" | "update">) {
   return (
     <div className="space-y-3">
       <Toggle
@@ -217,42 +250,7 @@ function CounterField({ cart, update }: Props) {
   );
 }
 
-function MusicField({ cart, update }: Props) {
-  const [raw, setRaw] = useState(cart.musicUrl ?? "");
-  const invalid = raw.trim().length > 0 && !cart.musicVideoId;
-
-  function onChange(v: string) {
-    setRaw(v);
-    const id = extractYouTubeId(v);
-    update({ musicUrl: v.trim() || null, musicVideoId: id });
-  }
-
-  return (
-    <div>
-      <FieldLabel hint="opcional">Música (link do YouTube)</FieldLabel>
-      <TextField
-        value={raw}
-        onChange={onChange}
-        placeholder="Cole o link do YouTube da música de vocês"
-        ariaLabel="Link do YouTube da música"
-      />
-      {invalid && (
-        <p className="mt-1 text-xs text-vinho">
-          Cole um link válido do YouTube (ex: youtube.com/watch?v=… ou youtu.be/…).
-        </p>
-      )}
-      {cart.musicVideoId && (
-        <p className="mt-1 text-xs text-green-700">✓ Música reconhecida.</p>
-      )}
-      <p className="mt-1 text-xs text-grafite/45">
-        A música começa a tocar depois que a pessoa clicar para abrir o envelope —
-        assim respeitamos as regras de reprodução dos navegadores.
-      </p>
-    </div>
-  );
-}
-
-function ThemeField({ cart, update }: Props) {
+function ThemeField({ cart, update }: Pick<Props, "cart" | "update">) {
   return (
     <div>
       <FieldLabel>Tema visual</FieldLabel>

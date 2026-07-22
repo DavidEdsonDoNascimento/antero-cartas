@@ -16,7 +16,20 @@ export type AnalyticsEvent =
   | "payment_confirmed"
   | "cart_published"
   | "cart_opened"
-  | "whatsapp_share_clicked";
+  | "whatsapp_share_clicked"
+  | "music_search_started"
+  | "music_search_completed"
+  | "music_search_failed"
+  | "music_selected"
+  | "music_removed"
+  | "music_preview_played"
+  | "draft_created"
+  | "draft_saved"
+  | "photo_uploaded"
+  | "photo_removed"
+  | "order_created"
+  | "mock_payment_confirmed"
+  | "qr_code_viewed";
 
 /** Propriedades permitidas: nunca dados pessoais nem conteúdo da carta. */
 type SafeProps = Record<string, string | number | boolean | null>;
