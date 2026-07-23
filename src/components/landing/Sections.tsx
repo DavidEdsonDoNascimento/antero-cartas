@@ -5,6 +5,7 @@ import { MAX_CART_PHOTOS } from "@/lib/image";
 import { recipients } from "@/content/recipients";
 import { occasions } from "@/content/occasions";
 import { testimonials, testimonialsAreDemo } from "@/content/testimonials";
+import { CreateCta } from "@/components/create/CreateCta";
 
 export function SectionHeading({
   eyebrow,
@@ -120,8 +121,7 @@ export function Plans() {
               </li>
             ))}
           </ul>
-          <Link
-            href="/criar"
+          <CreateCta
             className={`mt-6 block rounded-full px-5 py-3 text-center text-sm font-semibold transition ${
               plan.highlight
                 ? "bg-vinho text-creme hover:bg-vinho-deep"
@@ -129,7 +129,7 @@ export function Plans() {
             }`}
           >
             Criar com o plano {plan.name}
-          </Link>
+          </CreateCta>
         </div>
       ))}
     </div>
@@ -177,12 +177,9 @@ export function FinalCta() {
     <div className="mx-auto max-w-2xl rounded-3xl bg-vinho px-6 py-12 text-center text-creme">
       <h2 className="text-3xl font-semibold sm:text-4xl">{positioning.closingTitle}</h2>
       <p className="mx-auto mt-3 max-w-md text-creme/80">{positioning.closingSubtitle}</p>
-      <Link
-        href="/criar"
-        className="mt-8 inline-block rounded-full bg-dourado px-8 py-4 text-base font-semibold text-vinho shadow-lg transition hover:brightness-105"
-      >
+      <CreateCta className="mt-8 inline-block rounded-full bg-dourado px-8 py-4 text-base font-semibold text-vinho shadow-lg transition hover:brightness-105">
         {positioning.heroCta} →
-      </Link>
+      </CreateCta>
     </div>
   );
 }
@@ -196,7 +193,7 @@ export function Footer() {
           <p className="text-xs">Um produto {site.company}</p>
         </div>
         <nav className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
-          <Link href="/criar" className="hover:text-vinho">Criar cartinha</Link>
+          <CreateCta className="hover:text-vinho">Criar cartinha</CreateCta>
           <Link href="/demonstracao" className="hover:text-vinho">Demonstração</Link>
           <Link href="/termos" className="hover:text-vinho">Termos</Link>
           <Link href="/privacidade" className="hover:text-vinho">Privacidade</Link>

@@ -14,7 +14,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "storage:setup": "tsx scripts/setupStorageBucket.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.0",

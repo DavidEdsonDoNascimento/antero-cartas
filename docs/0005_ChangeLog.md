@@ -1,5 +1,74 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.2] — Ajustes de experiência em /criar — 2026-07-23
+
+### Adicionado
+- **`lib/draftInit.ts`** — extrai a decisão de retomar/criar rascunho de
+  `CreateFlow` para uma função pura e testável (`resolveCartInit`), com cache
+  de prefetch (`prefetchCartInit`/`getCartInit`) usado pelo novo `CreateCta.tsx`.
+- **`CreateCta.tsx`** — substitui os `<Link href="/criar">` espalhados pela
+  landing/checkout/demonstração; dispara o prefetch da sessão no hover/clique.
+- **`CreateFlowSkeleton.tsx`** — substitui o texto solto "Carregando…" por uma
+  estrutura fiel ao layout real do editor.
+- **`ResumeDraftPrompt.tsx`** — retomar um rascunho abandonado agora é uma
+  escolha explícita ("Continuar esse rascunho" / "Começar uma cartinha nova"),
+  não automática.
+- **Preview otimista de fotos** (`StepPersonalize.tsx`): prévia local via
+  `URL.createObjectURL` aparece antes de validar/comprimir/enviar, com spinner
+  de envio e marcação de falha; nunca duplica com a foto persistida.
+- **Testes**: 9 novos para `resolveCartInit`/prefetch, cobrindo retomar
+  rascunho abandonado, não retomar carta publicada, não vazar cache legado ao
+  encerrar sessão inválida, e migração legítima da Fase 1.
+
+### Corrigido
+- **Dados de uma carta antiga vazando para uma nova**: `saveDraft(cart)` (cache
+  de recuperação do autosave) sobrevivia à publicação porque só `clearSession()`
+  rodava, nunca `clearDraft()`. Corrigido em `OrderSuccessClient` (ao publicar)
+  e em `resolveCartInit` (sempre que uma sessão inválida é encerrada) — ver
+  D46 em `docs/0004_Decisions.md`.
+
+### Alterado
+- Todos os CTAs "Criar minha cartinha"/"Criar cartinha"/"criar a minha" agora
+  usam `CreateCta` em vez de `Link` puro (Header, Sections, page.tsx,
+  demonstracao/page.tsx).
+
+## [Fase 2.1] — Storage de produção (Supabase Storage) — 2026-07-23
+
+### Adicionado
+- **`SupabaseStorageProvider`** (`server/storage/supabaseStorage.ts`) — segunda
+  implementação de `StorageProvider`, ativada por `STORAGE_PROVIDER=supabase`.
+  Fala com a API REST do Supabase Storage via `fetch`, **sem instalar SDK**
+  (nenhuma dependência nova). Timeout de 15s, remoção idempotente (404 = sucesso)
+  e `cache-control` imutável de 1 ano nos objetos, já que a chave contém UUID.
+- **`npm run storage:setup`** (`scripts/setupStorageBucket.ts`) — cria ou corrige
+  o bucket de forma idempotente: público para leitura, limite de 10 MB e MIME
+  types restritos a JPEG/PNG/WEBP. Avisa explicitamente para não criar policy
+  de listagem em `storage.objects`.
+- **Variáveis novas**: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (somente
+  servidor, nunca `NEXT_PUBLIC_`), `SUPABASE_STORAGE_BUCKET`.
+- **Testes**: 21 novos (config, URL pública, put/delete/read, chave inválida
+  barrada antes da requisição, erro do Storage convertido em 500 sem vazar
+  detalhe, seleção e memoização do provider na fábrica).
+
+### Alterado
+- **Fábrica `getStorage()`** agora despacha entre `local` e `supabase`, e
+  **falha explicitamente** em provider desconhecido em vez de exigir `local`.
+  Exporta `resetStorage()` para testes.
+- **`cartService.removeMedia`**: a remoção no storage virou best-effort de
+  verdade (era `await` sem `try`). Com storage em rede, uma falha de conexão
+  devolvia 500 ao usuário numa remoção que o banco já havia efetivado.
+- **`.env.example`** e docs 0003/0004 atualizados (decisões D39–D44; D28 marcada
+  como superada por D39).
+
+### Notas
+- Upload **continua passando pelo servidor Next** — URL assinada de upload
+  direto foi avaliada e descartada (D41): o ganho não se aplica (fotos
+  comprimidas ficam em ~150–400 KB) e custaria a validação de magic bytes.
+- `CartMedia.url` guarda a URL resolvida no momento do upload. Fotos enviadas
+  com `STORAGE_PROVIDER=local` continuam apontando para `/api/media` — as
+  existentes são dados de teste; trocar de bucket no futuro exige atualizar a
+  coluna.
+
 ## [Fase 2] — Persistência, upload e publicação da cartinha — 2026-07-22
 
 ### Adicionado

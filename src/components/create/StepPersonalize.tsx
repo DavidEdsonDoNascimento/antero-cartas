@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Cart, ThemeId } from "@/lib/types";
 import { themes } from "@/content/themes";
 import { MAX_CART_PHOTOS, compressPhoto, validateImageFile } from "@/lib/image";
@@ -38,6 +38,13 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiClientError ? err.message : fallback;
 }
 
+/** Prévia local de uma foto ainda em envio — nunca faz parte de cart.media. */
+interface OptimisticPhoto {
+  id: string;
+  previewUrl: string;
+  status: "uploading" | "error";
+}
+
 function PhotosField({
   cart,
   session,
@@ -46,21 +53,57 @@ function PhotosField({
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [optimistic, setOptimistic] = useState<OptimisticPhoto[]>([]);
+  const optimisticRef = useRef<OptimisticPhoto[]>([]);
+  useEffect(() => {
+    optimisticRef.current = optimistic;
+  }, [optimistic]);
+
+  // Evita vazar object URLs se o componente desmontar com uploads em andamento.
+  useEffect(() => {
+    return () => {
+      optimisticRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+    };
+  }, []);
+
+  function discardOptimistic(id: string, previewUrl: string) {
+    URL.revokeObjectURL(previewUrl);
+    setOptimistic((prev) => prev.filter((p) => p.id !== id));
+  }
 
   async function handleFiles(files: FileList | null) {
     if (!files) return;
     setError(null);
-    setBusy(true);
-    const remaining = MAX_CART_PHOTOS - cart.media.length;
-    const chosen = Array.from(files).slice(0, remaining);
-    if (files.length > remaining) {
+
+    const remaining = MAX_CART_PHOTOS - cart.media.length - optimistic.length;
+    const chosen = Array.from(files).slice(0, Math.max(0, remaining));
+    if (files.length > chosen.length) {
       setError(`Você pode adicionar no máximo ${MAX_CART_PHOTOS} fotos.`);
     }
+    if (chosen.length === 0) {
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
 
-    for (const file of chosen) {
+    // Prévia otimista imediata — aparece antes de validar, comprimir ou
+    // enviar. É isso que elimina a demora percebida entre selecionar a foto
+    // e vê-la na tela (o pipeline em si não muda).
+    const entries = chosen.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setOptimistic((prev) => [
+      ...prev,
+      ...entries.map(({ id, previewUrl }) => ({ id, previewUrl, status: "uploading" as const })),
+    ]);
+
+    setBusy(true);
+    for (const { id, file, previewUrl } of entries) {
       const validationError = await validateImageFile(file);
       if (validationError) {
         setError(validationError);
+        discardOptimistic(id, previewUrl);
         continue;
       }
       try {
@@ -69,10 +112,14 @@ function PhotosField({
           width,
           height,
         });
+        // A foto real já chegou em cart.media — some a prévia para nunca
+        // mostrar as duas ao mesmo tempo.
         onCartUpdated(res.cart);
         track("photo_uploaded", { count: res.cart.media.length });
+        discardOptimistic(id, previewUrl);
       } catch (err) {
         setError(apiErrorMessage(err, "Não foi possível enviar uma das fotos."));
+        setOptimistic((prev) => prev.map((p) => (p.id === id ? { ...p, status: "error" } : p)));
       }
     }
     setBusy(false);
@@ -125,11 +172,13 @@ function PhotosField({
     persistOrder([id, ...ids]);
   }
 
+  const totalCount = cart.media.length + optimistic.length;
+
   return (
     <div>
       <FieldLabel hint="opcional">Fotos (até {MAX_CART_PHOTOS})</FieldLabel>
       <div className="space-y-3">
-        {cart.media.length > 0 && (
+        {(cart.media.length > 0 || optimistic.length > 0) && (
           <div className="flex flex-wrap gap-3">
             {cart.media.map((m, i) => (
               <div key={m.id} className="w-24">
@@ -184,10 +233,44 @@ function PhotosField({
                 </div>
               </div>
             ))}
+
+            {optimistic.map((p) => (
+              <div key={p.id} className="w-24">
+                <div className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={p.previewUrl}
+                    alt="Enviando foto…"
+                    className={`h-24 w-24 rounded-lg object-cover shadow ${
+                      p.status === "uploading" ? "opacity-60" : "opacity-70"
+                    }`}
+                  />
+                  {p.status === "uploading" ? (
+                    <span
+                      aria-label="Enviando foto…"
+                      className="absolute inset-0 flex items-center justify-center"
+                    >
+                      <span className="h-6 w-6 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    </span>
+                  ) : (
+                    <span className="absolute inset-x-0 bottom-0 rounded-b-lg bg-vinho/85 px-1 py-0.5 text-center text-[10px] font-medium text-creme">
+                      Falhou
+                    </span>
+                  )}
+                  <button
+                    onClick={() => discardOptimistic(p.id, p.previewUrl)}
+                    aria-label="Remover esta foto"
+                    className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-grafite text-xs text-white shadow"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
-        {cart.media.length < MAX_CART_PHOTOS && (
+        {totalCount < MAX_CART_PHOTOS && (
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
@@ -195,9 +278,7 @@ function PhotosField({
             className="flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed border-rosa/40 bg-white/60 px-4 py-6 text-sm text-grafite/60 transition hover:border-vinho/50 hover:bg-rosa-soft/30 disabled:opacity-50"
           >
             <span className="text-2xl">🖼️</span>
-            {busy
-              ? "Processando…"
-              : `Selecionar fotos · ${cart.media.length}/${MAX_CART_PHOTOS}`}
+            {busy ? "Processando…" : `Selecionar fotos · ${totalCount}/${MAX_CART_PHOTOS}`}
           </button>
         )}
         <input

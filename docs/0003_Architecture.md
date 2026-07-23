@@ -118,10 +118,18 @@ src/
 
 ## Provedores desacoplados (`src/server/*`)
 - **StorageProvider** (`server/storage/`) — `put/delete/getPublicUrl/read`.
-  Implementação **local (disco)** nesta fase, atrás da mesma interface que um
-  provider S3/R2 usaria em produção. Upload passa pelo servidor Next
-  (justificativa: sem infraestrutura S3 configurada neste ambiente; limitação
-  de tamanho de payload e tempo de execução fica sujeita ao runtime/hospedagem).
+  Duas implementações, escolhidas por `STORAGE_PROVIDER`:
+  - `local` (padrão em dev) — disco em `.data/uploads`, servido por
+    `/api/media`. Não sobrevive a deploy serverless nem a múltiplas instâncias.
+  - `supabase` (produção) — Supabase Storage via API REST (sem SDK), bucket
+    público com CDN. As fotos passam a ser servidas direto pelo bucket:
+    `getPublicUrl` devolve a URL do Supabase e `/api/media` deixa de ser usada.
+
+  Em ambos, o upload passa pelo **servidor Next** (`multipart/form-data`) para
+  preservar a validação de magic bytes antes de qualquer byte chegar ao
+  storage — ver D41. A segurança da foto vem da chave inadivinhável
+  (`carts/{cartId}/{uuid}.{ext}`, UUID de 122 bits) somada à ausência de
+  policy de listagem no bucket (D42); a service role key nunca sai do servidor.
 - **PaymentProvider** (`server/payment/`) — `createPayment/getPaymentStatus`.
   Apenas `MockPaymentProvider` nesta fase; protegido por `PAYMENT_MODE=mock` **e**
   `ALLOW_MOCK_PAYMENT_CONFIRMATION=true` (bloqueado por padrão fora de dev).

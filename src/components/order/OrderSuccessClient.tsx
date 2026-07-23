@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { getOrderResult, ApiClientError, type OrderResult } from "@/lib/api";
 import { clearSession } from "@/lib/cartSession";
+import { clearDraft } from "@/lib/storage";
 import { getPlan } from "@/config/plans";
 import { whatsappShareUrl } from "@/lib/whatsapp";
 import { track } from "@/lib/analytics";
@@ -99,9 +100,12 @@ function PaidView({
 
   useEffect(() => {
     if (qrCodeDataUrl) track("qr_code_viewed", {});
-    // Compra concluída: encerra a sessão do rascunho para que "criar outra
-    // cartinha" comece do zero (a carta atual já está publicada).
+    // Compra concluída: encerra a sessão E o cache local de recuperação
+    // (antero:draft é atualizado a cada autosave, inclusive desta carta já
+    // publicada) para que "criar outra cartinha" comece realmente do zero,
+    // sem herdar campos desta.
     clearSession();
+    clearDraft();
   }, [qrCodeDataUrl]);
 
   async function copy() {

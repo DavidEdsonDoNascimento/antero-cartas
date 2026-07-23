@@ -197,7 +197,15 @@ export async function removeMedia(
       ),
     );
   });
-  await getStorage().delete(media.storageKey);
+  // Best-effort de verdade: o banco já é a fonte da verdade e a foto saiu da
+  // carta. Com storage remoto uma falha de rede aqui deixaria o usuário com
+  // erro 500 numa remoção que, do ponto de vista dele, já aconteceu. No pior
+  // caso sobra um objeto órfão no bucket.
+  try {
+    await getStorage().delete(media.storageKey);
+  } catch (err) {
+    console.error(`[storage] falha ao remover ${media.storageKey}:`, err);
+  }
 
   return dbToDomainCart(await loadRow(cartId));
 }

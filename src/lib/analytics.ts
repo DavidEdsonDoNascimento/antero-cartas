@@ -24,6 +24,7 @@ export type AnalyticsEvent =
   | "music_removed"
   | "music_preview_played"
   | "draft_created"
+  | "draft_resumed"
   | "draft_saved"
   | "photo_uploaded"
   | "photo_removed"

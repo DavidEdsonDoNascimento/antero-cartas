@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { site, positioning } from "@/config/site";
+import { CreateCta } from "@/components/create/CreateCta";
 
 const NAV = [
   { href: "#como-funciona", label: "Como funciona" },
@@ -45,12 +46,9 @@ export function Header() {
                 {n.label}
               </a>
             ))}
-            <Link
-              href="/criar"
-              className="rounded-full bg-vinho px-5 py-2 text-sm font-semibold text-creme transition hover:bg-vinho-deep"
-            >
+            <CreateCta className="rounded-full bg-vinho px-5 py-2 text-sm font-semibold text-creme transition hover:bg-vinho-deep">
               {positioning.heroCta}
-            </Link>
+            </CreateCta>
           </nav>
 
           <button
@@ -76,12 +74,9 @@ export function Header() {
                   {n.label}
                 </a>
               ))}
-              <Link
-                href="/criar"
-                className="mt-1 rounded-full bg-vinho px-5 py-2.5 text-center text-sm font-semibold text-creme"
-              >
+              <CreateCta className="mt-1 rounded-full bg-vinho px-5 py-2.5 text-center text-sm font-semibold text-creme">
                 {positioning.heroCta}
-              </Link>
+              </CreateCta>
             </div>
           </nav>
         )}

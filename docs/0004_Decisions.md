@@ -166,6 +166,9 @@ rota ficam sujeitos ao runtime/hospedagem escolhida; em serverless (ex.:
 Vercel) o disco não é persistente entre deploys — a troca para S3/R2 é feita
 implementando a mesma interface, sem tocar no domínio.
 
+> **Superada por D39** (Fase 2.1): o provider de produção passou a ser o
+> Supabase Storage. O disco local continua sendo o padrão em desenvolvimento.
+
 ## D29 — Prisma 7: driver adapter + `prisma.config.ts`
 A versão instalada (Prisma 7) mudou convenções relevantes: o gerador é
 `prisma-client` (saída em `src/generated/prisma`, TS puro, gitignored); as
@@ -241,3 +244,126 @@ por ser inacessível em produção por construção).
 acidentalmente em qualquer banco (de teste, dev ou produção) sem intenção
 explícita do desenvolvedor, e documenta a recomendação de usar um banco/branch
 dedicado a testes, nunca o de produção.
+
+---
+
+# Fase 2.1 — Storage de produção
+
+## D39 — Supabase Storage como provider de produção
+Escolhido entre Supabase Storage, Cloudflare R2 e AWS S3. Decisivo: o banco já
+está no Supabase, então não entra provedor, conta nem painel novo — mesma
+origem de credenciais e mesmo ciclo de vida do projeto. Tem CDN na frente e
+free tier de 1 GB, suficiente com folga para fotos comprimidas (~150–400 KB
+cada, até 6 por cartinha). R2 (sem custo de egress) e S3 continuam viáveis:
+bastaria mais uma implementação de `StorageProvider`, sem tocar no domínio —
+exatamente o que D28 previu.
+
+Implementado em `server/storage/supabaseStorage.ts`, selecionado por
+`STORAGE_PROVIDER=supabase`. O disco local segue como padrão em dev.
+
+## D40 — Sem SDK: API REST do Storage via `fetch`
+`@supabase/supabase-js` não foi instalado. A superfície usada é pequena e
+estável (POST/DELETE/GET de um objeto e o caminho público do bucket), e o SDK
+traria o cliente de auth/realtime/postgrest inteiro para o servidor sem
+necessidade. Mesmo critério já aplicado à busca do YouTube (D-Fase 1.2), e
+mesma disciplina de dependências das demais decisões.
+
+## D41 — Upload continua passando pelo servidor Next (não URL assinada)
+O handoff da Fase 2 sugeria upload direto do navegador por URL assinada. Foi
+descartado por dois motivos concretos:
+1. **O benefício não se aplica.** URL assinada existe para driblar limites de
+   payload; o cliente já comprime para JPEG 1400 px q0.72 (~150–400 KB), muito
+   abaixo do limite de uma Route Handler (~4,5 MB em serverless). Server
+   Actions têm limite de 1 MB, mas o upload é Route Handler, não Server Action.
+2. **Custaria um controle de segurança real.** Com upload direto, o servidor
+   deixa de ver os bytes e a validação de **magic bytes** de
+   `cartService.addMedia` some — qualquer conteúdo poderia entrar no bucket com
+   extensão de imagem. Recuperar isso exigiria verificação assíncrona
+   pós-upload, mais complexa do que o problema que resolve.
+
+A troca continua contida: a interface `StorageProvider` não muda, então adotar
+URL assinada depois é trocar a implementação de `put` e o caminho do cliente.
+
+## D42 — Bucket público com chave inadivinhável, sem política de listagem
+O bucket é **público para leitura**, e não privado com URL assinada de validade
+curta. Motivo: URL assinada expira, o que quebra cache/CDN, obriga a re-assinar
+a cada render da carta pública e conflita frontalmente com o plano **Para
+Sempre** (link sem expiração).
+
+A proteção é a mesma do slug da carta: a chave termina em `randomUUID()`
+(122 bits), então a URL é inadivinhável. Complementos obrigatórios:
+- **Nenhuma policy de SELECT/list em `storage.objects`** para este bucket —
+  sem ela a chave anônima lê apenas URLs que já conhece e não consegue
+  enumerar as fotos.
+- **Escrita/remoção só com a service role key**, que nunca sai do servidor
+  (`SUPABASE_SERVICE_ROLE_KEY`, sem prefixo `NEXT_PUBLIC_`).
+- Bucket criado com `file_size_limit` de 10 MB e `allowed_mime_types`
+  restrito a JPEG/PNG/WEBP — defesa em profundidade, além da validação da rota.
+
+Aceito conscientemente: quem receber a URL de uma foto continua acessando-a
+mesmo depois de a carta expirar. É o mesmo grau de exposição de uma foto
+enviada por WhatsApp e não vale o custo de arquitetura de um bucket privado.
+
+## D43 — Remoção de foto no storage é best-effort de verdade
+`cartService.removeMedia` já documentava a remoção no storage como
+best-effort, mas o `await` sem `try` transformava qualquer falha em HTTP 500 —
+inofensivo com disco local, mas não com storage em rede. Como o banco é a fonte
+da verdade e a transação já removeu a foto da carta, uma falha de rede na
+exclusão do objeto passou a ser registrada em log e ignorada. No pior caso
+sobra um objeto órfão no bucket; a alternativa era devolver erro ao usuário por
+uma remoção que, para ele, já aconteceu.
+
+## D44 — `npm run storage:setup` em vez de configuração manual
+O bucket é criado/corrigido por `scripts/setupStorageBucket.ts` (idempotente),
+não por cliques no dashboard: a configuração que importa para a segurança
+(público, limite de tamanho, MIME types permitidos) fica versionada e
+reproduzível em qualquer ambiente novo.
+
+---
+
+# Fase 2.2 — Ajustes de experiência em /criar (task 008)
+
+## D45 — Prefetch da sessão no CTA em vez de esperar montar /criar
+`/criar` é uma rota estática, mas `CreateFlow` só renderizava o editor depois
+de uma chamada de rede (retomar ou criar rascunho), mostrando "Carregando…"
+em tela branca por alguns segundos. A lógica de decisão foi extraída para
+`lib/draftInit.ts` (`resolveCartInit`, testável sem DOM) com um cache de
+prefetch (`prefetchCartInit`/`getCartInit`) disparado no hover/clique do CTA
+via `CreateCta.tsx` — a navegação client-side do App Router preserva o módulo
+em memória, então a rede já está em andamento quando `/criar` monta. Para o
+restante dos casos (link direto, atualização de página, rede lenta),
+`CreateFlowSkeleton` substitui o texto solto por uma estrutura fiel ao layout
+real (StepIndicator, painel do formulário, preview) — nunca mais tela branca.
+
+## D46 — Cache de recuperação local precisa morrer junto com a sessão
+Causa raiz do "dados da carta anterior aparecendo na nova": `saveDraft(cart)`
+roda a cada autosave (inclusive de uma carta prestes a ser publicada) e grava
+o cart inteiro em `antero:draft` como cache de recuperação. Publicar uma carta
+só limpava `antero:session`; o cache sobrevivia e, na ausência de sessão, era
+tratado como "rascunho legado da Fase 1" a migrar — reintroduzindo campos de
+uma carta já concluída. Fix: sempre que uma sessão é encerrada por qualquer
+motivo (publicada, token inválido, carta não encontrada), `clearDraft()` roda
+junto com `clearSession()` — em `resolveCartInit()` (sessão inválida) e em
+`OrderSuccessClient` (publicação). A migração genuína da Fase 1 continua
+intacta: só é acionada quando nunca existiu `antero:session`.
+
+## D47 — Retomar rascunho é decisão do usuário, não automática
+`resolveCartInit()` nunca aplica sozinho um "resume": devolve `{kind:
+"resume"}` e quem decide é `ResumeDraftPrompt` (novo componente), com as
+opções "Continuar esse rascunho" / "Começar uma cartinha nova". A carta
+abandonada não é apagada ao escolher recomeçar — fica órfã em `DRAFT`, mesmo
+destino de qualquer rascunho nunca finalizado (não há endpoint de exclusão e
+não foi criado um só para isso).
+
+## D48 — Preview otimista de foto, sem tocar no pipeline de upload
+`StepPersonalize` mostrava a foto só depois de validar, comprimir e concluir
+o upload no Supabase Storage — 100% síncrono com a primeira atualização
+visual. Fix: `URL.createObjectURL` cria uma prévia local instantânea (estado
+local do componente, nunca em `cart.media`/autosave) com spinner enquanto
+valida/comprimir/envia em background; sucesso substitui a prévia pela foto
+real vinda do servidor (sem duplicar, já que só uma das duas listas mostra
+cada foto por vez), falha marca a prévia com "Falhou" e permite descartar.
+Object URLs são revogados no sucesso, na falha, ao descartar e ao desmontar.
+Avaliado e descartado paralelizar os uploads de múltiplos arquivos: o
+servidor calcula `position` por contagem sem transação (`cartService.addMedia`),
+então uploads concorrentes colidiriam na posição — mantido sequencial.

@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Cart } from "@/lib/types";
-import { loadDraft, saveDraft, clearDraft, hasMeaningfulContent } from "@/lib/storage";
-import { loadSession, saveSession, clearSession, type CartSession } from "@/lib/cartSession";
-import { createDraft, fetchCart, patchCart, uploadPhoto, type CartPatch } from "@/lib/api";
+import { saveDraft, clearDraft } from "@/lib/storage";
+import { saveSession, clearSession, type CartSession } from "@/lib/cartSession";
+import { patchCart, uploadPhoto, createDraft } from "@/lib/api";
+import { buildPatch, getCartInit, type CartInitOutcome } from "@/lib/draftInit";
 import { track } from "@/lib/analytics";
 import { site } from "@/config/site";
 import { CardPreview } from "@/components/card/CardPreview";
+import { CreateFlowSkeleton } from "./CreateFlowSkeleton";
+import { ResumeDraftPrompt } from "./ResumeDraftPrompt";
 import { StepIndicator } from "./StepIndicator";
 import { StepRecipient } from "./StepRecipient";
 import { StepMessage } from "./StepMessage";
@@ -20,24 +23,7 @@ import { GhostButton, PrimaryButton } from "./ui";
 
 type View = 1 | 2 | 3 | 4 | "plan";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
-
-/** Campos editáveis persistidos via autosave (fotos usam endpoints próprios). */
-function buildPatch(cart: Cart): CartPatch {
-  return {
-    recipientType: cart.recipientType,
-    recipientName: cart.recipientName,
-    occasion: cart.occasion,
-    title: cart.title,
-    message: cart.message,
-    senderName: cart.senderName,
-    signature: cart.signature,
-    theme: cart.theme,
-    music: cart.music,
-    relationshipStartDate: cart.relationshipStartDate,
-    showRelationshipCounter: cart.showRelationshipCounter,
-    planType: cart.planType,
-  };
-}
+type ResumeOutcome = Extract<CartInitOutcome, { kind: "resume" }>;
 
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const res = await fetch(dataUrl);
@@ -51,6 +37,8 @@ export function CreateFlow() {
   const [view, setView] = useState<View>(1);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [initError, setInitError] = useState(false);
+  const [pendingResume, setPendingResume] = useState<ResumeOutcome | null>(null);
+  const [resumeBusy, setResumeBusy] = useState(false);
   const [photoMigrationNotice, setPhotoMigrationNotice] = useState(false);
   const [showMobilePreview, setShowMobilePreview] = useState(false);
 
@@ -58,61 +46,16 @@ export function CreateFlow() {
   const saveSeqRef = useRef(0);
   const lastSavedSnapshot = useRef<string>("");
 
-  // --- Inicialização: retoma sessão existente ou migra rascunho local -------
-  const init = useCallback(async () => {
-    setInitError(false);
-    const existing = loadSession();
-    if (existing) {
-      try {
-        const { cart: loaded } = await fetchCart(existing.cartId, existing.editToken);
-        // Só retoma se a carta ainda for editável. Se já foi publicada/paga
-        // (ex.: um teste ou compra anterior), descarta a sessão e começa uma
-        // nova — evita o erro "Esta carta já foi processada" no checkout.
-        if (loaded.status === "DRAFT" || loaded.status === "AWAITING_PAYMENT") {
-          lastSavedSnapshot.current = JSON.stringify(buildPatch(loaded));
-          setSession(existing);
-          setCart(loaded);
-          return;
-        }
-        clearSession();
-      } catch {
-        clearSession(); // token inválido ou carta não encontrada: recomeça
-      }
-    }
-
-    const legacy = loadDraft();
-    const shouldMigrate = legacy && hasMeaningfulContent(legacy);
-    const initialPatch: CartPatch | undefined = shouldMigrate
-      ? {
-          recipientType: legacy.recipientType,
-          recipientName: legacy.recipientName,
-          occasion: legacy.occasion,
-          title: legacy.title,
-          message: legacy.message,
-          senderName: legacy.senderName,
-          signature: legacy.signature,
-          theme: legacy.theme,
-          music: legacy.music,
-          relationshipStartDate: legacy.relationshipStartDate,
-          showRelationshipCounter: legacy.showRelationshipCounter,
-          planType: legacy.planType,
-        }
-      : undefined;
-
-    try {
-      const { cart: created, editToken } = await createDraft(initialPatch);
-      const newSession: CartSession = { cartId: created.id, editToken };
-      saveSession(newSession);
-      setSession(newSession);
-      track("draft_created");
-
-      let finalCart = created;
-      if (shouldMigrate && legacy!.media.length > 0) {
+  /** Aplica um rascunho recém-criado: migra fotos legadas, se houver, e entra no editor. */
+  const applyCreateOutcome = useCallback(
+    async (outcome: Extract<CartInitOutcome, { kind: "create" }>) => {
+      let finalCart = outcome.cart;
+      if (outcome.legacyMedia.length > 0) {
         let anyFailed = false;
-        for (const m of legacy!.media) {
+        for (const m of outcome.legacyMedia) {
           try {
             const blob = await dataUrlToBlob(m.url);
-            const res = await uploadPhoto(newSession.cartId, newSession.editToken, blob);
+            const res = await uploadPhoto(outcome.session.cartId, outcome.session.editToken, blob);
             finalCart = res.cart;
           } catch {
             anyFailed = true;
@@ -120,18 +63,68 @@ export function CreateFlow() {
         }
         if (anyFailed) setPhotoMigrationNotice(true);
       }
+      clearDraft(); // só remove o rascunho legado depois de confirmado no backend
       lastSavedSnapshot.current = JSON.stringify(buildPatch(finalCart));
+      setSession(outcome.session);
       setCart(finalCart);
-      clearDraft(); // só remove o rascunho antigo depois de confirmado no backend
+      track("draft_created");
+    },
+    [],
+  );
+
+  // --- Inicialização: retoma sessão existente ou cria um rascunho novo ------
+  const init = useCallback(async () => {
+    setInitError(false);
+    setPendingResume(null);
+    try {
+      const outcome = await getCartInit();
+      if (outcome.kind === "resume") {
+        // Retomar não é automático: quem decide é o usuário (ver ResumeDraftPrompt).
+        setPendingResume(outcome);
+        return;
+      }
+      await applyCreateOutcome(outcome);
     } catch {
       setInitError(true);
     }
-  }, []);
+  }, [applyCreateOutcome]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     init();
   }, [init]);
+
+  function continueResumedDraft() {
+    if (!pendingResume) return;
+    lastSavedSnapshot.current = JSON.stringify(buildPatch(pendingResume.cart));
+    setSession(pendingResume.session);
+    setCart(pendingResume.cart);
+    setPendingResume(null);
+    track("draft_resumed");
+  }
+
+  async function startFreshDraft() {
+    if (!pendingResume || resumeBusy) return;
+    setResumeBusy(true);
+    // A carta abandonada não é apagada (fica órfã em DRAFT, igual a qualquer
+    // rascunho nunca finalizado) — só deixamos de referenciá-la localmente.
+    clearSession();
+    clearDraft();
+    try {
+      const { cart: created, editToken } = await createDraft();
+      const newSession: CartSession = { cartId: created.id, editToken };
+      saveSession(newSession);
+      lastSavedSnapshot.current = JSON.stringify(buildPatch(created));
+      setSession(newSession);
+      setCart(created);
+      setPendingResume(null);
+      track("draft_created");
+    } catch {
+      setInitError(true);
+    } finally {
+      setResumeBusy(false);
+    }
+  }
 
   const update = useCallback((patch: Partial<Cart>) => {
     setSaveStatus("saving");
@@ -176,8 +169,19 @@ export function CreateFlow() {
     );
   }
 
+  if (pendingResume) {
+    return (
+      <ResumeDraftPrompt
+        cart={pendingResume.cart}
+        onContinue={continueResumedDraft}
+        onStartFresh={startFreshDraft}
+        busy={resumeBusy}
+      />
+    );
+  }
+
   if (!cart || !session) {
-    return <div className="py-20 text-center text-grafite/50">Carregando…</div>;
+    return <CreateFlowSkeleton />;
   }
 
   const canAdvance = validateStep(view, cart);

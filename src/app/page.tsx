@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { positioning } from "@/config/site";
 import { Header } from "@/components/landing/Header";
+import { CreateCta } from "@/components/create/CreateCta";
 import { DemoSection } from "@/components/landing/DemoSection";
 import { Faq } from "@/components/landing/Faq";
 import { TrackView } from "@/components/analytics/TrackView";
@@ -35,12 +36,9 @@ export default function Home() {
                 {positioning.heroSubtitle}
               </p>
               <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:justify-start">
-                <Link
-                  href="/criar"
-                  className="w-full rounded-full bg-vinho px-8 py-4 text-center text-base font-semibold text-creme shadow-lg transition hover:bg-vinho-deep sm:w-auto"
-                >
+                <CreateCta className="w-full rounded-full bg-vinho px-8 py-4 text-center text-base font-semibold text-creme shadow-lg transition hover:bg-vinho-deep sm:w-auto">
                   {positioning.heroCta} →
-                </Link>
+                </CreateCta>
                 <Link
                   href="/demonstracao"
                   className="w-full rounded-full border border-vinho px-8 py-4 text-center text-base font-semibold text-vinho transition hover:bg-vinho hover:text-creme sm:w-auto"

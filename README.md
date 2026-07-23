@@ -48,6 +48,35 @@ Railway...):
 > Use um banco **de desenvolvimento/teste**, nunca compartilhe credenciais de
 > produção neste arquivo.
 
+## Configurar o storage de fotos
+
+Em desenvolvimento o padrão é o **disco local** (`STORAGE_PROVIDER=local`), que
+grava em `.data/uploads` e serve por `/api/media`. Não precisa configurar nada.
+
+Para produção use o **Supabase Storage** — o disco local não sobrevive a deploy
+serverless (disco efêmero) nem funciona com múltiplas instâncias:
+
+1. No painel do Supabase, em **Project Settings → API**, copie:
+   - a **Project URL** → `SUPABASE_URL`
+   - a chave **`service_role`** → `SUPABASE_SERVICE_ROLE_KEY`
+2. Crie o bucket (idempotente, pode rodar de novo sem problema):
+   ```bash
+   npm run storage:setup
+   ```
+3. Ative o provider em `.env.local`:
+   ```
+   STORAGE_PROVIDER=supabase
+   ```
+
+> A `service_role` **ignora RLS** e vale como acesso total ao projeto: mantenha-a
+> só no servidor, nunca com prefixo `NEXT_PUBLIC_`, e nunca no repositório.
+
+O bucket é **público para leitura** e a privacidade da foto vem da chave, que
+termina em um UUID de 122 bits — mesmo modelo do slug da carta. Por isso **não
+crie policies de SELECT/list em `storage.objects`** para este bucket: sem elas,
+a chave anônima lê apenas URLs que já conhece e não consegue enumerar as fotos
+das cartinhas. Detalhes em `docs/0004_Decisions.md` (D39–D44).
+
 ## Scripts
 - `npm run dev` — ambiente de desenvolvimento
 - `npm run build` — build de produção
@@ -60,6 +89,7 @@ Railway...):
 - `npm run db:push` — sincroniza o schema sem gerar migration (protótipos rápidos)
 - `npm run db:seed` — popula dados de exemplo (nenhum dado real)
 - `npm run db:studio` — abre o Prisma Studio para inspecionar o banco
+- `npm run storage:setup` — cria/corrige o bucket de fotos no Supabase Storage
 
 Em produção, use `db:generate` no build e uma migration explícita
 (`prisma migrate deploy`, não incluído nos scripts por não ser usado ainda
