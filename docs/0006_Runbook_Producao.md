@@ -81,9 +81,10 @@ RUN_DB_TESTS=true npm test      # inclui os 7 testes de integração (usa o Post
 | `DATABASE_URL` / `DIRECT_URL` | — | **ausente** (proposital) | conexão do projeto remoto `antero-cartas` |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | — | **ausente** | do projeto remoto |
 | `STORAGE_PROVIDER` | — | — | `supabase` |
-| `ALLOW_MOCK_PAYMENT_CONFIRMATION` | — | — | `false` **(pendente — ver seção 9.5 da task)** |
+| `ALLOW_MOCK_PAYMENT_CONFIRMATION` | — | — | `false` |
+| `NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION` | — | — | **ausente** (equivale a `false` — ver incidente de 2026-07-24 abaixo) |
 | `DEV_EMAILS_ENABLED` | — | — | `false` |
-| `NEXT_PUBLIC_SITE_URL` | — | URL de preview gerada pela Vercel | `https://cartas.anterosistemas.com.br` |
+| `NEXT_PUBLIC_SITE_URL` | — | URL de preview gerada pela Vercel | `https://antero-cartas.vercel.app` (temporária — trocar para `https://cartas.anterosistemas.com.br` quando o domínio for configurado, etapa 4 da continuação) |
 
 **Decisão (task 7.6):** em vez de um banco de staging separado (que não
 existe), o ambiente **Preview simplesmente não recebe nenhuma credencial de
@@ -94,8 +95,23 @@ banco (`/`, `/termos`, `/privacidade`) normalmente; páginas/rotas que
 dependem do backend (`/criar`, `/api/*`, `/c/[slug]`) **não funcionam em
 Preview** nesta fase — limitação aceita conscientemente, documentada aqui.
 
-**(pendente)** — configuração real das variáveis fica para a Etapa 4, quando
-o projeto for criado na Vercel (requer acesso à sua conta).
+**Configurado na Etapa 4** (2026-07-24): projeto `antero-cartas` criado e
+vinculado ao repositório na Vercel, 18 variáveis de Production configuradas
+via CLI, Preview/Development confirmados vazios (`vercel env ls`).
+
+### Incidente (2026-07-24): checkout travava em "Confirmando seu pagamento…"
+
+No smoke test manual do primeiro deploy, o botão "Simular pagamento aprovado"
+aparecia no checkout de produção mesmo com `ALLOW_MOCK_PAYMENT_CONFIRMATION=false`
+— o servidor sempre bloqueou a confirmação (403 `mock_disabled`), mas o
+front-end não sabia disso e ficava preso indefinidamente em "Confirmando seu
+pagamento…" depois do clique. Causa e correção completas em
+`docs/0005_ChangeLog.md` (entrada "[Fase 2.5] — Checkout travava..."). Resumo:
+adicionada `NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION` (fail-closed, espelho
+de `ALLOW_MOCK_PAYMENT_CONFIRMATION`) para o front decidir se mostra o painel
+de simulação, e um estado terminal (`pending_timeout`) na tela de confirmação
+para nunca mais ficar presa em loading. **Não definir esta variável em
+Production** — a ausência é o comportamento correto (oculta o botão).
 
 ## 4. Backup
 

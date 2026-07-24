@@ -1,5 +1,63 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.5] — Checkout travava em "Confirmando seu pagamento…" em produção — 2026-07-24
+
+### Contexto (incidente)
+Smoke test manual no primeiro deploy de produção (`https://antero-cartas.vercel.app`):
+ao clicar em "Simular pagamento aprovado" no checkout, a tela ficava presa
+indefinidamente em "Confirmando seu pagamento…". `ALLOW_MOCK_PAYMENT_CONFIRMATION`
+nunca foi habilitada em produção — o bloqueio server-side sempre funcionou
+(`POST /api/orders/[id]/mock-confirm` responde 403 `mock_disabled`); o bug era
+inteiramente client-side.
+
+### Corrigido
+- **`CheckoutClient.tsx`**: o painel "Pagamento simulado" (`MockPaymentPanel`)
+  era renderizado incondicionalmente após criar o pedido, sem checar nenhuma
+  variável — o botão de simulação sempre aparecia, mesmo em produção onde o
+  servidor sempre rejeita a confirmação. Agora o painel só aparece quando
+  `flags.MOCK_PAYMENT_CONFIRMATION_ENABLED` está ligada; caso contrário mostra
+  `PaymentUnavailablePanel` com mensagem clara e um "Voltar" que retorna à
+  etapa do formulário (pedido e rascunho preservados — `createOrder` já é
+  idempotente por carta+plano).
+- **`OrderSuccessClient.tsx`**: o polling de `/api/orders/[id]` tinha um teto
+  de 20s (`POLL_TIMEOUT_MS`) que já funcionava — mas ao esgotar o prazo com o
+  pedido ainda `PENDING`, nenhum novo estado era definido. Como o render fixa
+  `status === "PENDING" → "Confirmando seu pagamento…"`, a tela ficava presa
+  nesse texto para sempre (não era polling infinito; era ausência de estado
+  terminal). Corrigido com um novo estado `pending_timeout` (mensagem +
+  "Verificar novamente" + "Voltar") e uma classificação de erro
+  (`retryable`) para respostas 400/401/403/404/409/429/500, falha de rede,
+  timeout e resposta inválida — cada uma encerra o loading corretamente.
+- **`src/lib/api.ts`**: `request()` não tinha timeout — uma requisição
+  travada na rede prenderia o polling indefinidamente sem nunca rejeitar.
+  Adicionado `timeoutMs` opcional (AbortController, mesmo padrão de
+  `youtubeSearch.ts`/`supabaseStorage.ts`); `getOrderResult` usa 8s. Também
+  passou a validar resposta 200 com corpo inválido (antes retornava `null`
+  silenciosamente).
+
+### Adicionado
+- **`NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION`**: espelho público de
+  `ALLOW_MOCK_PAYMENT_CONFIRMATION`, fail-closed (padrão `false`). Único jeito
+  de o checkout mostrar o painel de simulação — `NEXT_PUBLIC_PAYMENT_MODE`
+  sozinho não serve porque produção também roda `PAYMENT_MODE=mock` (Fase 3
+  ainda não existe). Documentado em `.env.example`; corrigido também em
+  `.env.production.reference` (tinha `ALLOW_MOCK_PAYMENT_CONFIRMATION=true`
+  desatualizado, nunca usado em produção porque a Vercel foi configurada
+  manualmente com `false`).
+- **`src/lib/orderPolling.ts`**: lógica pura do polling (`reduceOrderPoll`,
+  `classifyOrderError`, `PollTimeoutError`), extraída para ser testável sem
+  DOM (o projeto não tem `jsdom`/`testing-library`) — 10 testes novos.
+- **Testes**: `src/config/flags.test.ts` (4), `src/lib/orderPolling.test.ts`
+  (10), `src/server/payment/index.test.ts` (6, cobrindo o bloqueio server-side
+  do mock-confirm por combinação de `PAYMENT_MODE`/`ALLOW_MOCK_PAYMENT_CONFIRMATION`).
+
+### Limitação conhecida
+Sem `jsdom`/`@testing-library/react` no projeto, não há teste de render/DOM
+confirmando que o botão desaparece visualmente — a cobertura garante a
+condição booleana que controla a renderização (`flags.MOCK_PAYMENT_CONFIRMATION_ENABLED`),
+e a ausência do botão em produção foi confirmada manualmente após o redeploy.
+Ver `docs/0006_Runbook_Producao.md`, seção 3 ("Incidente (2026-07-24)").
+
 ## [Fase 2.2] — Ajustes de experiência em /criar — 2026-07-23
 
 ### Adicionado
