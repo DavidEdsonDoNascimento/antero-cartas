@@ -367,3 +367,80 @@ Object URLs são revogados no sucesso, na falha, ao descartar e ao desmontar.
 Avaliado e descartado paralelizar os uploads de múltiplos arquivos: o
 servidor calcula `position` por contagem sem transação (`cartService.addMedia`),
 então uploads concorrentes colidiriam na posição — mantido sequencial.
+
+---
+
+# Fase 2.5 — Preparação para produção (task 011)
+
+## D49 — Ambiente local via Supabase CLI + Docker, `APP_ENV` como guarda explícita
+Superada a limitação de D27 (Docker Desktop não estava em execução na Fase 2):
+agora com Docker disponível, o desenvolvimento passa a usar **Supabase local**
+(`npx supabase start`, `supabase/config.toml`) em vez do projeto remoto — banco,
+Storage e Studio locais, sem custo e sem tocar em dado de produção. Serviços não
+usados pelo produto (Auth, Realtime, Edge Functions, analytics interno do
+Supabase, pooler) foram desativados no `config.toml` para reduzir containers e
+tempo de start; a política de arquitetura proporcional (`docs/0003`) se aplica
+também aqui.
+
+Em vez de comparar `DATABASE_URL`/hostname (frágil, D-anti-pattern citado pela
+task), foi criada uma variável explícita `APP_ENV` (`local` | `production` |
+`test`, padrão `local`) em `src/lib/appEnv.ts`:
+- `assertNotAccidentalProduction()` — chamada em `lib/db.ts` e
+  `server/storage/index.ts` — bloqueia com erro claro se `APP_ENV=production`
+  rodar sob um processo com `NODE_ENV != "production"` (ou seja, `next dev`
+  usando por engano credenciais de produção). Nunca bloqueia produção
+  legítima (`NODE_ENV=production` real).
+- `assertPrismaCliAllowed()` — chamada em `prisma.config.ts`, portanto vale
+  para todo comando do Prisma CLI — exige a confirmação explícita adicional
+  `ALLOW_PRISMA_CLI_PRODUCTION=true` sempre que `APP_ENV=production`. Isso
+  cobre exatamente o caso que a task pede para evitar: `prisma migrate dev`/
+  `db push`/`studio` rodando sem querer contra o banco remoto. Em produção
+  (Vercel), o passo de build define as duas variáveis só para o comando
+  `prisma migrate deploy`.
+
+Testado em `src/lib/appEnv.test.ts` (9 casos): não bloqueia com `APP_ENV=local`
+independentemente de `NODE_ENV`; bloqueia a combinação perigosa; não bloqueia
+produção real; CLI liberado com a confirmação explícita.
+
+## D50 — Uma única fonte de verdade para o schema: Prisma, não o Supabase CLI
+O Supabase CLI tem seu próprio mecanismo de migration (`supabase/migrations/*.sql`
++ tabela `supabase_migrations.schema_migrations`), independente do Prisma
+(`prisma/migrations/*` + `_prisma_migrations`). Manter os dois seria exatamente
+o "dois históricos divergentes" que a task proíbe. Decisão: **o Prisma continua
+sendo a única fonte de verdade do schema** (como já valia para o projeto remoto
+desde D29). O Supabase CLI local só orquestra os containers (Postgres, Storage,
+Studio) — `supabase/config.toml` desativa o seed SQL do CLI
+(`db.seed.enabled = false`) e não populamos `supabase/migrations/`.
+
+Fluxo de recriação local: `npm run supabase:reset` (recria o Postgres vazio,
+inclusive apagando os buckets) → `npm run db:migrate` (aplica as migrations do
+Prisma) → `npm run storage:setup` (recria o bucket) → `npm run db:seed` (dados
+fictícios). Validado de ponta a ponta nesta fase: reset completo seguido do
+ciclo acima e de `RUN_DB_TESTS=true npm test` (117/117 passando, incluindo os 7
+testes de integração contra o Postgres local).
+
+## D51 — `supabase` como devDependency, não instalação global
+Adicionado `supabase@2.109.1` em `devDependencies` (recomendação oficial do
+projeto Supabase) em vez de depender de instalação global ou de `npx` sempre
+buscando a versão mais recente — fixa a versão do CLI no `package-lock.json`,
+reproduzível entre máquinas. Scripts novos: `supabase:start`, `supabase:stop`,
+`supabase:status`, `supabase:reset`.
+
+## D52 — Backup local das credenciais remotas fora da convenção de autoload do Next
+As credenciais do projeto remoto (antes em `.env.local`) foram preservadas em
+`.env.production.reference` — deliberadamente **fora** do padrão
+`.env.production.local` que o Next.js autocarrega em qualquer `next build`/
+`next start` local (`NODE_ENV=production`). Se o arquivo se chamasse
+`.env.production.local`, rodar o build de produção localmente por engano
+apontaria de verdade para o banco remoto. `.env.production.reference` só é
+usado manualmente (colar no painel da Vercel, ou carregado explicitamente).
+`.env.local` passou a ser 100% local (Supabase via Docker).
+
+## D53 — `.env.example` reorganizado e versionado
+`.gitignore` ganhou `!.env.example` (só essa exceção ao padrão `.env*`). O
+arquivo foi reorganizado por categoria (aplicação, banco, Supabase, storage,
+YouTube, pagamento mock, e-mail mock, Sentry, analytics) e os valores padrão
+passaram a ser os do Supabase **local** — incluindo a chave `service_role` de
+demonstração do Supabase CLI, que é pública/fixa em qualquer instalação local
+(documentada pelo próprio Supabase, não é secreta) e permite que
+`cp .env.example .env.local && npx supabase start` funcione sem editar nada.

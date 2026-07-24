@@ -1,18 +1,21 @@
 import type { StorageProvider } from "./StorageProvider";
 import { createLocalDiskStorage } from "./localDisk";
 import { createSupabaseStorage } from "./supabaseStorage";
+import { assertNotAccidentalProduction } from "@/lib/appEnv";
 
 let cached: StorageProvider | null = null;
 
 /**
  * Fábrica de storage, escolhida por STORAGE_PROVIDER:
- * - "local"    → disco (`.data/uploads`), servido por /api/media. Dev.
- * - "supabase" → Supabase Storage (bucket público). Produção.
+ * - "local"    → disco (`.data/uploads`), servido por /api/media. Testes
+ *                isolados sem Docker.
+ * - "supabase" → Supabase Storage (bucket público). Local (Docker) e produção.
  *
  * O domínio nunca sabe qual está ativo: só conhece a interface StorageProvider.
  */
 export function getStorage(): StorageProvider {
   if (cached) return cached;
+  assertNotAccidentalProduction("src/server/storage/index.ts");
   const provider = (process.env.STORAGE_PROVIDER || "local").trim().toLowerCase();
 
   switch (provider) {

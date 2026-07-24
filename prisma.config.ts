@@ -5,6 +5,11 @@ loadEnv({ path: ".env.local" });
 loadEnv({ path: ".env" });
 
 import { defineConfig } from "prisma/config";
+import { assertPrismaCliAllowed } from "./src/lib/appEnv";
+
+// Proteção contra rodar comando de desenvolvimento do Prisma CLI (migrate
+// dev, db push, studio) sem querer contra o banco de produção — ver D49.
+assertPrismaCliAllowed();
 
 export default defineConfig({
   schema: "prisma/schema.prisma",

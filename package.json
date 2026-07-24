@@ -12,10 +12,15 @@
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "storage:setup": "tsx scripts/setupStorageBucket.ts"
+    "storage:setup": "tsx scripts/setupStorageBucket.ts",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "supabase:reset": "supabase db reset"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.0",
@@ -37,6 +42,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
     "prisma": "^7.9.0",
+    "supabase": "^2.109.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5",
