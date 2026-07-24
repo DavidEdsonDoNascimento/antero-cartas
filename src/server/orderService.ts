@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { ApiError } from "@/server/errors";
 import { getPlan } from "@/config/plans";
 import { site } from "@/config/site";
+import { buildPublicCartUrl } from "@/lib/publicUrl";
 import { publishCartWithClient } from "@/server/cartService";
 import { dbToDomainCart, type DbCartRow } from "@/lib/cartMapping";
 import { getPaymentProvider, isMockConfirmationAllowed } from "@/server/payment";
@@ -204,7 +205,7 @@ export async function mockConfirmOrder(
   );
 
   const cart = dbToDomainCart(publishedRow as unknown as DbCartRow);
-  const publicUrl = `${site.url}/c/${cart.slug}`;
+  const publicUrl = buildPublicCartUrl(cart.slug!);
   const qrCodeDataUrl = await generateQrDataUrl(publicUrl);
 
   await deliverPublishedEmail(orderId, existing.customerName, existing.customerEmail, cart, publicUrl, qrCodeDataUrl);
@@ -227,7 +228,7 @@ async function buildResultFromExisting(existing: {
     include: cartInclude,
   });
   const cart = cartRow ? dbToDomainCart(cartRow as unknown as DbCartRow) : null;
-  const publicUrl = cart?.slug ? `${site.url}/c/${cart.slug}` : null;
+  const publicUrl = cart?.slug ? buildPublicCartUrl(cart.slug) : null;
   const qrCodeDataUrl = publicUrl ? await generateQrDataUrl(publicUrl) : null;
   return { order: toSummary(order), cart, publicUrl, qrCodeDataUrl };
 }

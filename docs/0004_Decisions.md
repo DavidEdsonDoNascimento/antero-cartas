@@ -444,3 +444,25 @@ passaram a ser os do Supabase **local** — incluindo a chave `service_role` de
 demonstração do Supabase CLI, que é pública/fixa em qualquer instalação local
 (documentada pelo próprio Supabase, não é secreta) e permite que
 `cp .env.example .env.local && npx supabase start` funcione sem editar nada.
+
+## D54 — `NEXT_PUBLIC_APP_URL` removida; `NEXT_PUBLIC_SITE_URL` validada em produção
+As duas variáveis tinham a mesma responsabilidade (montar a URL pública da
+carta) com fallbacks diferentes: `site.url` (`NEXT_PUBLIC_SITE_URL`) caía para
+o domínio real se ausente; `NEXT_PUBLIC_APP_URL` (só usada em
+`app/c/[slug]/page.tsx`, para o botão de WhatsApp da própria carta) caía para
+`http://localhost:3000`. Configurar só a primeira em produção deixaria o
+compartilhamento da carta apontando para `localhost`. Consolidado numa única
+variável (`NEXT_PUBLIC_SITE_URL`) e num único ponto de montagem
+(`src/lib/publicUrl.ts#buildPublicCartUrl`), usado tanto pelo e-mail/QR Code
+(`orderService.ts`) quanto pelo compartilhamento na carta pública.
+
+Adicionada validação em `src/config/site.ts`: em produção, rejeita URL vazia,
+malformada, protocolo não-https e hosts localhost/loopback — um QR Code
+gerado com URL errada é irrecuperável depois de impresso/enviado (task 011,
+seção 8.3–8.4). A validação usa `APP_ENV` (D49), **não** `NODE_ENV`: como
+`npm run build`/`npm start` sempre definem `NODE_ENV=production` (mesmo
+localmente), usar `NODE_ENV` quebraria um build local de verificação
+apontando para `localhost`. Confirmado nesta fase: build local com
+`APP_ENV=production` e URL localhost falha com mensagem clara; com a URL real
+(`https://cartas.anterosistemas.com.br`), o mesmo build passa. Testado em
+`src/config/site.test.ts` e `src/lib/publicUrl.test.ts`.

@@ -83,7 +83,7 @@ RUN_DB_TESTS=true npm test      # inclui os 7 testes de integração (usa o Post
 | `STORAGE_PROVIDER` | — | — | `supabase` |
 | `ALLOW_MOCK_PAYMENT_CONFIRMATION` | — | — | `false` **(pendente — ver seção 9.5 da task)** |
 | `DEV_EMAILS_ENABLED` | — | — | `false` |
-| `NEXT_PUBLIC_SITE_URL` / `NEXT_PUBLIC_APP_URL` | — | URL de preview gerada pela Vercel | `https://cartas.anterosistemas.com.br` |
+| `NEXT_PUBLIC_SITE_URL` | — | URL de preview gerada pela Vercel | `https://cartas.anterosistemas.com.br` |
 
 **Decisão (task 7.6):** em vez de um banco de staging separado (que não
 existe), o ambiente **Preview simplesmente não recebe nenhuma credencial de

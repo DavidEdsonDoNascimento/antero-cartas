@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getPublicCart } from "@/server/cartService";
+import { buildPublicCartUrl } from "@/lib/publicUrl";
 import { CardExperience } from "@/components/card/CardExperience";
 
 /**
@@ -25,11 +26,7 @@ export default async function CartaPage({
     return <NotAvailable expired={result.state === "expired"} />;
   }
 
-  return <CardExperience cart={result.cart} shareUrl={`${appUrl()}/c/${slug}`} />;
-}
-
-function appUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  return <CardExperience cart={result.cart} shareUrl={buildPublicCartUrl(slug)} />;
 }
 
 function NotAvailable({ expired }: { expired: boolean }) {
