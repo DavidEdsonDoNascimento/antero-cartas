@@ -252,6 +252,39 @@ tudo em volta dela:
 3. Para uma migration considerada arriscada (remover coluna, mudar tipo),
    faça um `pg_dump` antes (seção 4) — nunca em migrations puramente aditivas.
 
-**Build Command da Vercel (produção): `prisma generate && next build`** — só
-gera o client, nunca migra. `prisma generate` é seguro e barato de rodar em
-todo build (não toca no banco).
+**Build Command da Vercel: o padrão da plataforma (`next build`), sem
+customização.** `prisma generate` roda sozinho via `postinstall` do
+`package.json` — dispara a cada `npm install` (inclusive o da Vercel antes do
+build), sem precisar aparecer no Build Command. `prisma generate` é seguro e
+barato de rodar sempre: só lê `schema.prisma`, nunca toca o banco (por isso é
+o único comando do Prisma CLI isento do guard `APP_ENV`, ver D49).
+
+## 7. Testes de upload — tamanhos de arquivo
+
+Testado localmente (servidor Next local + Supabase Storage local),
+2026-07-24, via requisições diretas à API `POST /api/carts/[id]/media`
+(sem passar pela compressão do navegador — testa o **guard de tamanho do
+servidor**, camada de defesa que existe independentemente da compressão do
+cliente). Arquivos gerados sinteticamente (JPEG válido nos magic bytes,
+inflado com marcadores COM) para atingir tamanhos exatos sem depender de
+fotos reais.
+
+| Tamanho enviado | Resultado | Status HTTP | Tempo |
+|---|---|---|---|
+| 5 MB | aceito, salvo no Storage local | 201 | ~1,1 s |
+| 9,99 MB (limite − 200 B) | aceito | 201 | ~0,24 s |
+| 10 MB (limite + 4 B) | rejeitado, mensagem clara | 400 | ~0,07 s |
+| 10 MB + 1 B | rejeitado, mensagem clara | 400 | ~0,06 s |
+| 15 MB | rejeitado, mensagem clara | 400 | ~0,11 s |
+
+**Conclusão:** o guard de tamanho (`MAX_UPLOAD_BYTES`, `src/lib/limits.ts`,
+10 MB) funciona corretamente no limite exato, rejeita rápido e sem erro
+genérico. Como o cliente comprime antes de enviar (~150–400 KB por foto,
+D41), o caminho normal nunca chega perto desse limite — este teste cobre o
+caso de borda (compressão falhar/ser pulada), não o caminho feliz.
+
+**Não testado nesta etapa** (precisa de navegador real ou dispositivo físico
+— ver checklist manual no arquivo de handoff): tempo de compressão no
+cliente, tempo de preview otimista, comportamento em rede móvel, e o **limite
+de payload da função serverless da Vercel** (~4,5 MB por requisição) — só se
+confirma depois do deploy real com um upload de fato passando pela Vercel.
