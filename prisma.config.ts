@@ -9,7 +9,13 @@ import { assertPrismaCliAllowed } from "./src/lib/appEnv";
 
 // Proteção contra rodar comando de desenvolvimento do Prisma CLI (migrate
 // dev, db push, studio) sem querer contra o banco de produção — ver D49.
-assertPrismaCliAllowed();
+// Exceção: `prisma generate` nunca toca o banco (só lê o schema.prisma e
+// gera código) — precisa poder rodar sem confirmação extra porque é
+// disparado automaticamente pelo `postinstall` a cada deploy na Vercel.
+// process.argv[2] é o subcomando (`generate`, `migrate`, `db`, `studio`...).
+if (process.argv[2] !== "generate") {
+  assertPrismaCliAllowed();
+}
 
 export default defineConfig({
   schema: "prisma/schema.prisma",

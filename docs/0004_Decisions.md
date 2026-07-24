@@ -390,11 +390,15 @@ task), foi criada uma variável explícita `APP_ENV` (`local` | `production` |
   rodar sob um processo com `NODE_ENV != "production"` (ou seja, `next dev`
   usando por engano credenciais de produção). Nunca bloqueia produção
   legítima (`NODE_ENV=production` real).
-- `assertPrismaCliAllowed()` — chamada em `prisma.config.ts`, portanto vale
-  para todo comando do Prisma CLI — exige a confirmação explícita adicional
-  `ALLOW_PRISMA_CLI_PRODUCTION=true` sempre que `APP_ENV=production`. Isso
-  cobre exatamente o caso que a task pede para evitar: `prisma migrate dev`/
-  `db push`/`studio` rodando sem querer contra o banco remoto. Em produção
+- `assertPrismaCliAllowed()` — chamada em `prisma.config.ts` para todo
+  comando do Prisma CLI **exceto `generate`** (checado via `process.argv[2]`
+  — `generate` só lê `schema.prisma` e nunca toca o banco, e roda sozinho a
+  cada `npm install` via `postinstall`, inclusive na Vercel; exigir
+  confirmação ali quebraria todo deploy). Para os demais comandos, exige a
+  confirmação explícita adicional `ALLOW_PRISMA_CLI_PRODUCTION=true` sempre
+  que `APP_ENV=production`. Isso cobre exatamente o caso que a task pede
+  para evitar: `prisma migrate dev`/`db push`/`studio` rodando sem querer
+  contra o banco remoto. Em produção
   (Vercel), o passo de build define as duas variáveis só para o comando
   `prisma migrate deploy`.
 

@@ -196,3 +196,62 @@ npx tsx scripts/cleanupTestData.ts --env-file .env.production.reference \
 
 **Nada foi executado.** Aguardando sua decisão sobre quais IDs remover (e se
 os dois seeds ficam ou saem do remoto).
+
+## 6. Estratégia de migration em produção
+
+**Decisão: migrations NÃO rodam dentro do Build Command da Vercel.** Elas são
+um passo manual e deliberado, feito pelo desenvolvedor antes de cada deploy
+que muda o schema — não automático a cada push.
+
+### Por que não simplesmente colocar no Build Command
+`prisma migrate deploy` é idempotente (só aplica migrations pendentes) e por
+si só seria seguro rodar a cada build. O problema não é a idempotência — é
+tudo em volta dela:
+- **Deployments de Preview** nunca têm `DATABASE_URL` de produção (seção 3) —
+  então nem poderiam rodar migration mesmo se estivesse no build command
+  compartilhado; mas isso também significa que colocar o comando ali só
+  funcionaria de fato no ambiente Production, exigindo dois Build Commands
+  diferentes por ambiente (complexidade extra sem necessidade real).
+- **Builds concorrentes**: dois deploys de produção próximos rodariam
+  `migrate deploy` em paralelo. O Prisma usa um lock a nível de banco para
+  isso (relativamente seguro), mas é uma variável a menos para gerenciar se a
+  migration simplesmente não roda de forma automática.
+- **Falha no meio da migration**: se `migrate deploy` aplicar parte do schema
+  e falhar, o **build inteiro falha** e a Vercel mantém a versão anterior no
+  ar — mas o banco já ficou com o schema novo (parcial ou não) enquanto o
+  código antigo continua rodando contra ele. Sem controle manual, não há
+  window para conferir isso antes do próximo deploy.
+- **Rollback**: reverter um deploy da Vercel não reverte uma migration já
+  aplicada. Precisa ser um passo consciente, não escondido dentro do build.
+
+### Como funciona na prática
+1. Antes de um deploy que muda `prisma/schema.prisma`, rode a migration
+   manualmente contra produção, definindo as credenciais **só para aquele
+   comando** (nunca em `.env.local`):
+   ```bash
+   # bash — variáveis só para este comando (não persistem no shell)
+   DATABASE_URL="<DATABASE_URL de .env.production.reference>" \
+   DIRECT_URL="<DIRECT_URL de .env.production.reference>" \
+   APP_ENV=production ALLOW_PRISMA_CLI_PRODUCTION=true \
+   npm run db:migrate:deploy
+   ```
+   ```powershell
+   # PowerShell — equivalente
+   $env:DATABASE_URL = "<DATABASE_URL de .env.production.reference>"
+   $env:DIRECT_URL = "<DIRECT_URL de .env.production.reference>"
+   $env:APP_ENV = "production"
+   $env:ALLOW_PRISMA_CLI_PRODUCTION = "true"
+   npm run db:migrate:deploy
+   ```
+   As duas variáveis de confirmação (`APP_ENV`/`ALLOW_PRISMA_CLI_PRODUCTION`)
+   são exigidas por `prisma.config.ts` (D49) — sem elas o comando recusa
+   rodar. `dotenv` não sobrescreve variáveis já definidas no shell, então
+   isso funciona mesmo com `.env.local` apontando para o Supabase local.
+2. Só depois de a migration ser aplicada com sucesso, faça o deploy do
+   código (push no branch de produção / promover o deploy na Vercel).
+3. Para uma migration considerada arriscada (remover coluna, mudar tipo),
+   faça um `pg_dump` antes (seção 4) — nunca em migrations puramente aditivas.
+
+**Build Command da Vercel (produção): `prisma generate && next build`** — só
+gera o client, nunca migra. `prisma generate` é seguro e barato de rodar em
+todo build (não toca no banco).
