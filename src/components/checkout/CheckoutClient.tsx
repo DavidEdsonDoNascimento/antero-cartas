@@ -9,6 +9,7 @@ import { fetchCart, createOrder, mockConfirm, ApiClientError, type OrderSummary 
 import { getPlan, formatBRL } from "@/config/plans";
 import { LIMITS } from "@/lib/limits";
 import { site } from "@/config/site";
+import { flags } from "@/config/flags";
 import { track } from "@/lib/analytics";
 import { PrimaryButton } from "@/components/create/ui";
 
@@ -88,6 +89,13 @@ export function CheckoutClient({ cartId }: { cartId: string }) {
   }
 
   if (state.step === "paying") {
+    if (!flags.MOCK_PAYMENT_CONFIRMATION_ENABLED) {
+      return (
+        <PaymentUnavailablePanel
+          onBack={() => setState({ step: "form", cart: state.cart, token: state.token })}
+        />
+      );
+    }
     return (
       <MockPaymentPanel
         order={state.order}
@@ -254,6 +262,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <span className="mb-1.5 block text-sm font-medium text-grafite">{label}</span>
       {children}
     </label>
+  );
+}
+
+function PaymentUnavailablePanel({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="mx-auto max-w-md px-4 py-10 text-center">
+      <div className="mb-3 text-4xl">⏳</div>
+      <h1 className="text-2xl font-semibold text-vinho">Pagamento indisponível</h1>
+      <p className="mt-2 text-sm text-grafite/70">
+        Os pagamentos ainda não estão disponíveis neste ambiente. Sua cartinha foi salva e
+        poderá ser concluída quando o pagamento estiver habilitado.
+      </p>
+      <button
+        onClick={onBack}
+        className="mt-6 inline-block text-sm font-medium text-vinho underline"
+      >
+        Voltar
+      </button>
+    </div>
   );
 }
 

@@ -20,4 +20,16 @@ export const flags = {
    * "real" quando um PaymentProvider de produção estiver plugado (Fase 3).
    */
   PAYMENT_MODE: (process.env.NEXT_PUBLIC_PAYMENT_MODE ?? "mock") as "mock" | "real",
+
+  /**
+   * Espelho público de ALLOW_MOCK_PAYMENT_CONFIRMATION (server-only). Decide
+   * se a UI de checkout mostra os botões "simular pagamento" — PAYMENT_MODE
+   * sozinho não basta porque produção também roda em modo mock (Fase 3 ainda
+   * não existe). Padrão false (fail-closed): sem a variável, o painel de
+   * simulação fica oculto e o checkout mostra a mensagem de indisponibilidade.
+   */
+  MOCK_PAYMENT_CONFIRMATION_ENABLED: readBool(
+    process.env.NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION,
+    false,
+  ),
 } as const;
