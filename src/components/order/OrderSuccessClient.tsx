@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { getOrderResult, ApiClientError, type OrderResult } from "@/lib/api";
+import { getOrderResult, type OrderResult } from "@/lib/api";
+import { reduceOrderPoll, type PollUiState } from "@/lib/orderPolling";
 import { clearSession } from "@/lib/cartSession";
 import { clearDraft } from "@/lib/storage";
 import { getPlan } from "@/config/plans";
@@ -11,16 +12,14 @@ import { track } from "@/lib/analytics";
 import { site } from "@/config/site";
 import { PrimaryButton } from "@/components/create/ui";
 
-type State =
-  | { kind: "loading" }
-  | { kind: "result"; result: OrderResult }
-  | { kind: "error"; message: string };
+type State = { kind: "loading" } | PollUiState;
 
 const POLL_MS = 2500;
 const POLL_TIMEOUT_MS = 20000;
 
 export function OrderSuccessClient({ orderId }: { orderId: string }) {
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [attempt, setAttempt] = useState(0);
   const startRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -29,21 +28,23 @@ export function OrderSuccessClient({ orderId }: { orderId: string }) {
     let timer: ReturnType<typeof setTimeout>;
 
     async function poll() {
+      let decision: ReturnType<typeof reduceOrderPoll>;
       try {
         const result = await getOrderResult(orderId);
         if (cancelled) return;
-        setState({ kind: "result", result });
         const elapsed = Date.now() - (startRef.current ?? Date.now());
-        if (result.order.status === "PENDING" && elapsed < POLL_TIMEOUT_MS) {
-          timer = setTimeout(poll, POLL_MS);
-        }
+        decision = reduceOrderPoll({ ok: true, result }, elapsed, POLL_TIMEOUT_MS);
       } catch (err) {
         if (cancelled) return;
-        setState({
-          kind: "error",
-          message:
-            err instanceof ApiClientError ? err.message : "Não foi possível consultar o pedido.",
-        });
+        const elapsed = Date.now() - (startRef.current ?? Date.now());
+        decision = reduceOrderPoll({ ok: false, error: err }, elapsed, POLL_TIMEOUT_MS);
+      }
+      if (cancelled) return;
+      setState(decision.state);
+      // "keep_polling" só existe enquanto status === PENDING dentro do prazo —
+      // nunca reagenda em erro/timeout/estado terminal (ver reduceOrderPoll).
+      if (decision.action === "keep_polling") {
+        timer = setTimeout(poll, POLL_MS);
       }
     }
     poll();
@@ -51,15 +52,45 @@ export function OrderSuccessClient({ orderId }: { orderId: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [orderId]);
+  }, [orderId, attempt]);
+
+  const retry = useCallback(() => {
+    setState({ kind: "loading" });
+    setAttempt((n) => n + 1);
+  }, []);
 
   if (state.kind === "loading") {
     return <Centered>Carregando…</Centered>;
   }
+
   if (state.kind === "error") {
     return (
       <Centered>
         <p className="text-vinho">{state.message}</p>
+        <div className="mt-4 flex flex-col items-center gap-2">
+          {state.retryable && <PrimaryButton onClick={retry}>Tentar novamente</PrimaryButton>}
+          <Link href="/criar" className="text-sm text-vinho underline">
+            Voltar
+          </Link>
+        </div>
+      </Centered>
+    );
+  }
+
+  if (state.kind === "pending_timeout") {
+    const { cartId } = state.result.order;
+    return (
+      <Centered>
+        <p className="text-grafite/70">
+          Ainda não conseguimos confirmar seu pagamento. Sua cartinha e seu pedido foram salvos —
+          você pode verificar novamente ou voltar mais tarde.
+        </p>
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <PrimaryButton onClick={retry}>Verificar novamente</PrimaryButton>
+          <Link href={`/checkout/${cartId}`} className="text-sm text-vinho underline">
+            Voltar
+          </Link>
+        </div>
       </Centered>
     );
   }

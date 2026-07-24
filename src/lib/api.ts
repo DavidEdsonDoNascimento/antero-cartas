@@ -19,23 +19,45 @@ export class ApiClientError extends Error {
   }
 }
 
+/** Requisição abortada por `timeoutMs` — distinta de uma falha de rede comum. */
+export class RequestTimeoutError extends Error {
+  constructor() {
+    super("Tempo esgotado ao consultar o servidor.");
+    this.name = "RequestTimeoutError";
+  }
+}
+
 async function request<T>(
   path: string,
-  init: RequestInit & { token?: string | null } = {},
+  init: RequestInit & { token?: string | null; timeoutMs?: number } = {},
 ): Promise<T> {
-  const { token, headers, ...rest } = init;
-  const res = await fetch(path, {
-    ...rest,
-    headers: {
-      ...(headers ?? {}),
-      ...(token ? { [EDIT_TOKEN_HEADER]: token } : {}),
-    },
-  });
+  const { token, headers, timeoutMs, ...rest } = init;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...rest,
+      signal: controller?.signal,
+      headers: {
+        ...(headers ?? {}),
+        ...(token ? { [EDIT_TOKEN_HEADER]: token } : {}),
+      },
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") throw new RequestTimeoutError();
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const code = data?.error?.code ?? "unknown";
     const message = data?.error?.message ?? "Erro inesperado. Tente novamente.";
     throw new ApiClientError(code, message, res.status);
+  }
+  if (data === null) {
+    throw new ApiClientError("invalid_response", "Resposta inválida do servidor.", res.status);
   }
   return data as T;
 }
@@ -161,8 +183,11 @@ export function createOrder(
   });
 }
 
+/** Timeout curto: esta chamada é repetida via polling, não deve travar a UI. */
+const ORDER_POLL_TIMEOUT_MS = 8000;
+
 export function getOrderResult(orderId: string): Promise<OrderResult> {
-  return request(`/api/orders/${orderId}`);
+  return request(`/api/orders/${orderId}`, { timeoutMs: ORDER_POLL_TIMEOUT_MS });
 }
 
 export function mockConfirm(
