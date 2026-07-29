@@ -5,9 +5,13 @@ Cartinhas digitais para surpreender alguém especial. Um produto da **Antero Sis
 Crie uma cartinha com mensagem, fotos, música e contador de tempo. Ela abre no
 celular por um link privado, como um envelope — sem app, sem cadastro.
 
-> Status: **Fase 2 — persistência e infraestrutura mínima** (banco real, upload
-> real de fotos, pedido + pagamento mock, publicação, QR Code, e-mail mock).
-> **Pagamento real ainda não implementado.**
+> Status: **Fase 3 — venda real, em andamento** (`docs/tasks/013_fase_3.md`).
+> Produção está no ar em `https://cartas.anterosistemas.com.br` com domínio,
+> Sentry e Analytics ativos (Fase 2.5 concluída). Pagamento real (Mercado
+> Pago, Pix + cartão) e e-mail real (Resend) já estão implementados e
+> testados, mas **ainda não ativados** — produção continua em
+> `PAYMENT_MODE=mock`/`EMAIL_MODE=mock` até a validação em sandbox e
+> autorização explícita (ver `docs/0006_Runbook_Producao.md`, seções 14–16).
 > Veja o faseamento em [`docs/0002_MVP_Plan.md`](docs/0002_MVP_Plan.md).
 
 ## Stack
@@ -199,8 +203,9 @@ de teste, rollback) estão no runbook de produção.
 - [`docs/0003_Architecture.md`](docs/0003_Architecture.md) — stack e estrutura
 - [`docs/0004_Decisions.md`](docs/0004_Decisions.md) — decisões e valores provisórios
 - [`docs/0005_ChangeLog.md`](docs/0005_ChangeLog.md) — histórico de mudanças
-- [`docs/0006_Runbook_Producao.md`](docs/0006_Runbook_Producao.md) — runbook de produção e checklist manual
+- [`docs/0006_Runbook_Producao.md`](docs/0006_Runbook_Producao.md) — runbook de produção, checklist manual, Mercado Pago e Resend
 - [`docs/0008_Handoff_Fase2_5_Final.md`](docs/0008_Handoff_Fase2_5_Final.md) — estado final da Fase 2.5
+- [`docs/tasks/013_fase_3.md`](docs/tasks/013_fase_3.md) — escopo da Fase 3 (pagamento e e-mail reais)
 
 ## Configuração central
 - `src/config/site.ts` — marca, copy e posicionamento

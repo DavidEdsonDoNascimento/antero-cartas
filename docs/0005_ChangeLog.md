@@ -1,5 +1,84 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 3] — Pagamento e e-mail reais: Mercado Pago + Resend (código, sandbox ainda não validado) — 2026-07-29
+
+Início da Fase 3 (task 013), autônomo até o primeiro checkpoint humano real
+(conta/credenciais do Mercado Pago e do Resend). Mocks continuam ligados em
+produção (`PAYMENT_MODE=mock`, `EMAIL_MODE=mock`) — nada disto foi ativado.
+
+### Adicionado
+
+- **Schema**: `OrderStatus` ganha `CHARGED_BACK`; novo modelo `PaymentEvent`
+  para idempotência e rastreabilidade de webhook (migration aditiva,
+  `20260729212231_phase3_payment_events_and_charged_back`).
+- **`src/server/payment/mercadoPagoStatus.ts`**: mapeia o vocabulário do
+  Mercado Pago para o estado interno; `shouldApplyTransition` bloqueia
+  regressão de estado (evento fora de ordem). Ver D61.
+- **`src/server/payment/mercadoPagoWebhookSignature.ts`**: valida a
+  assinatura `x-signature` (manifest + HMAC-SHA256 + comparação
+  *timing-safe*), conferida contra exemplos reais do Mercado Pago.
+- **`src/server/payment/mercadopago.ts`**: `PaymentProvider` real (Pix +
+  cartão) via `fetch`, sem SDK. `PaymentProvider`/`CreatePaymentInput` foram
+  estendidos (payer, token de cartão, dados de Pix) preservando a mesma
+  interface que o mock já implementava.
+- **`POST /api/webhooks/mercadopago`**: única rota que aprova pagamento. Ver
+  D60.
+- **`POST /api/orders/[id]/payments/pix`** e **`/payments/card`**: criam a
+  tentativa de pagamento real para um pedido já existente (preço/plano
+  definidos no servidor na criação do pedido). Ver D62/D63.
+- **`orderService.applyMercadoPagoWebhook`** e
+  **`orderService.finalizeOrderAsPaid`**: o núcleo de "aprovar pagamento"
+  (claim atômico + publicação transacional + outbox de e-mail) foi extraído
+  de `mockConfirmOrder` para ser reusado pelo webhook real, sem duplicar a
+  lógica nem mudar o comportamento do fluxo mock existente.
+- **Frontend**: `PixPaymentPanel` (QR Code, copia-e-cola, validade, polling
+  limitado) e `CardPaymentPanel` (Payment Brick do Mercado Pago via
+  `<script>`, token nunca passa pelo servidor). `CheckoutClient` mostra o
+  seletor de método quando `PAYMENT_MODE=real`.
+- **`OrderSuccessClient`**: trata `CANCELLED` (tentar de novo),
+  `REFUNDED`/`CHARGED_BACK` (aponta para suporte via WhatsApp, não "tentar
+  de novo" — reabrir um pedido já estornado não faz sentido do mesmo jeito).
+- **`src/server/email/resend.ts`**: `EmailProvider` real via Resend, sem SDK.
+  Template compartilhado com o mock em `render.ts` — ver D65. Inclui link de
+  suporte e aviso para guardar o link, que o template da Fase 2 não tinha.
+- **`scripts/reprocessFailedEmails.ts`**: reprocessamento simples (sem
+  fila/Redis) de `EmailDelivery` com status `FAILED`, seguro por padrão
+  (dry run sem `--confirm`), até 5 tentativas.
+- **CSP**: domínios do Payment Brick (`*.mercadopago.com`/`*.mlstatic.com`)
+  liberados só quando `PAYMENT_MODE=real`. Ver D64.
+- **Rate limiting**: estendido de `/api/youtube/search` para
+  `POST /api/orders` e as duas rotas de pagamento. Ver D66.
+- **Analytics**: `payment_method_selected`, `payment_pending`,
+  `payment_failed`, `letter_published` (substituindo `cart_published`, que
+  nunca tinha sido chamado em lugar nenhum).
+
+### Testes
+
+72 testes novos: mapeamento de estado e transição (21), assinatura do
+webhook (10), provedor Mercado Pago (10), rota do webhook (7), validação da
+rota de cartão (4), integração (10, banco local: duplicado, fora de ordem,
+tentativa superada, pedido desconhecido, estorno, recusa, expiração,
+guardas de tentativa de pagamento, falha de e-mail não desfaz publicação),
+CSP do Payment Brick (2), provedor de e-mail Resend + template (14),
+seleção de provider mock/real (6). `npm run lint`, `npm run typecheck` e
+`npm run build` limpos; `RUN_DB_TESTS=true npm test`: **283/283 passando**.
+
+### Verificado, não suposto
+
+Formato do webhook, criação de pagamento Pix/cartão e SDK do Payment Brick
+foram conferidos contra documentação e exemplos de código reais do Mercado
+Pago antes de implementar — não a partir de memória de treinamento, dado
+que é código financeiro. Mesmo assim, os campos exatos só se confirmam de
+verdade contra o sandbox real (próximo passo, após as credenciais).
+
+### Não executado (aguarda ação externa)
+
+Conta e credenciais sandbox do Mercado Pago; conta e domínio verificado no
+Resend; configuração do webhook no painel; smoke test sandbox completo;
+qualquer ativação de credencial ou flag de produção. Nada disso foi feito —
+ver pendências no handoff.
+
+
 ## [Fase 2.5] — Redeploy com Sentry ativo e validação controlada — 2026-07-29
 
 Retomada depois de indisponibilidade da API do Claude. `NEXT_PUBLIC_SENTRY_DSN`

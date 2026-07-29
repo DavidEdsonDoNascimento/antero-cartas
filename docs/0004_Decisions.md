@@ -567,3 +567,85 @@ O mapeamento compartilhado de `forbidden_state` **não** foi alterado: ele é
 usado por estados legítimos de negócio (carta não editável, carta já
 processada), onde 409 está correto. Fora de produção, `DEV_EMAILS_ENABLED=false`
 continua devolvendo 409 com mensagem útil — quem lê isso é o desenvolvedor.
+
+---
+
+# Fase 3 — Venda real (task 013)
+
+## D60 — Webhook como única fonte de verdade, idempotência por `PaymentEvent`
+O retorno do navegador, a query string, o redirecionamento e o polling do
+front nunca aprovam um pagamento — só `applyMercadoPagoWebhook`
+(`src/server/orderService.ts`), chamado pela rota `/api/webhooks/mercadopago`
+depois da assinatura validada. Idempotência por `(provider, providerEventId)`
+— o `id` da notificação em si, não o id do pagamento, porque o mesmo
+pagamento pode gerar várias notificações ao longo do tempo (criado,
+atualizado). Inserir de novo o mesmo evento falha por constraint única e a
+rota responde 200 sem reprocessar, sem precisar de uma tabela de lock à
+parte. O modelo não guarda dado do pagador — só o necessário para decidir e
+auditar (`providerPaymentId`, `rawStatus`, `orderId`).
+
+## D61 — Mapeamento de estado com regra explícita contra "fora de ordem"
+`mercadoPagoStatus.ts` centraliza a tradução do vocabulário do Mercado Pago
+(`approved`, `rejected`, `cancelled` + `status_detail`, `refunded`,
+`charged_back`) para o enum interno — nenhuma outra parte do domínio conhece
+essas strings. `shouldApplyTransition` só permite avançar (de `PENDING` para
+qualquer estado; de `PAID` só para `REFUNDED`/`CHARGED_BACK`) — uma
+notificação atrasada de `pending` chegando depois de `approved` já
+processado é ignorada, não reabre o pedido. Status desconhecido/futuro do
+Mercado Pago cai em `PENDING` por padrão, nunca em `PAID` — mais seguro errar
+para "ainda não confirmado" do que publicar por engano.
+
+Além disso, o webhook compara o `providerPaymentId` da notificação com o
+salvo no pedido: se não bater, é uma tentativa já superada (ex.: 2º cartão
+depois do 1º ser recusado) e é ignorada sem tocar no estado — evita que uma
+notificação atrasada da tentativa antiga sobrescreva o resultado da nova.
+
+## D62 — Retry de cartão reaproveita o mesmo pedido; resposta síncrona nunca publica
+Ao contrário do Pix (uma cobrança por pedido), cartão pode ser tentado várias
+vezes no mesmo pedido (`createCardPaymentAttempt`): cada tentativa sobrescreve
+`providerPaymentId`/`paymentMethod` e o pedido volta para `PENDING` — sem
+criar uma segunda linha de `Order` por tentativa, mantendo o esquema simples.
+A resposta síncrona do Mercado Pago (`approved`/`rejected`/`in_process`) é
+usada só para feedback imediato ao comprador ("recusado, tente outro
+cartão"); a publicação em si espera sempre o webhook, mesmo quando a resposta
+síncrona já diz "aprovado" — ver task 013, seção 9.
+
+## D63 — Pix sem proteção contra clique duplo (limitação aceita)
+`createPixPaymentAttempt` não impede uma segunda chamada para o mesmo
+pedido — um duplo clique criaria uma segunda cobrança Pix no Mercado Pago, e
+se o comprador pagasse a primeira exatamente nesse intervalo, a checagem de
+"tentativa superada" (D61) descartaria a notificação dela. Risco considerado
+desprezível na prática (a janela é de milissegundos; Pix leva segundos para
+confirmar) e mitigado no front (botão desabilitado durante a criação). Não
+implementada solução mais robusta (buscar/reaproveitar o Pix em aberto) por
+não haver evidência de necessidade — revisitar se acontecer de verdade.
+
+## D64 — Payment Brick via `<script>`, não dependência do projeto
+Tokenização seguro de cartão exige o SDK do navegador do Mercado Pago
+(`https://sdk.mercadopago.com/js/v2`) — não há como reimplementar isso com
+segurança. Carregado por tag `<script>` sob demanda (mesma lógica do iframe
+do YouTube), não como pacote npm: número/CVV nunca chegam a este código nem
+ao servidor, só o token que o próprio SDK gera. `securityHeaders.ts` só
+libera `*.mercadopago.com`/`*.mlstatic.com` quando `PAYMENT_MODE=real` —
+domínios confirmados contra exemplos reais do Mercado Pago, não supostos, e
+ausentes da CSP em modo mock (nada do Brick é carregado, nada precisa ser
+permitido).
+
+## D65 — Template de e-mail único, compartilhado entre mock e Resend
+`src/server/email/render.ts` extrai a montagem do e-mail (antes só dentro do
+mock) para um módulo puro reusado pelos dois providers — impede que o
+conteúdo real divirja silenciosamente do que é visto em desenvolvimento via
+`/api/dev/emails`. Adicionado o que a task 013 (seção 12) pede e o template
+da Fase 2 não tinha: link de suporte por WhatsApp e aviso explícito para
+guardar o link. `RealEmailProvider` (Resend) segue a mesma disciplina de
+D40/D-mercadopago: sem SDK, só `fetch` num único endpoint
+(`POST /emails`), porque a superfície usada é pequena e estável.
+
+## D66 — Rate limit estendido às rotas de pedido/pagamento
+O limitador em memória (`lib/rateLimit.ts`, já usado na busca do YouTube)
+passou a valer também para `POST /api/orders` e as duas rotas de tentativa de
+pagamento — as três rotas de escrita com efeito financeiro real. Mesma
+limitação de sempre: por instância, não compartilhado entre instâncias
+serverless (Redis fica fora do escopo, task 013 seção 20). O webhook não
+recebe rate limit por IP — sua proteção é a assinatura (D60/D61), e limitar
+por IP arriscaria descartar notificações legítimas do Mercado Pago.

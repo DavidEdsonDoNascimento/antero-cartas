@@ -598,3 +598,169 @@ original, resolução original, tamanho depois da compressão e resolução fina
 | Landing abre em tempo aceitável | | |
 | Upload de foto conclui | | |
 | Carta pública abre | | |
+
+---
+
+## 14. Mercado Pago (task 013 — Fase 3)
+
+### Checkpoints que dependem de você
+
+1. Criar/autenticar a conta do Mercado Pago.
+2. Criar uma aplicação em <https://www.mercadopago.com.br/developers/panel> (menu "Suas integrações").
+3. Copiar do painel, ambiente **de teste (sandbox)** primeiro:
+   - `Access Token` de teste → `MERCADOPAGO_ACCESS_TOKEN`;
+   - `Public Key` de teste → `NEXT_PUBLIC_MERCADOPAGO_PUBLIC_KEY`.
+4. Configurar o webhook no painel (Sua aplicação → Webhooks → Configurar
+   notificações):
+   - URL: `https://cartas.anterosistemas.com.br/api/webhooks/mercadopago`;
+   - Eventos: **Pagamentos** (`payment`);
+   - Copiar a **assinatura secreta** exibida → `MERCADOPAGO_WEBHOOK_SECRET`.
+5. Configurar as três variáveis na Vercel (Production, e um projeto/valores
+   **diferentes** em Preview se for testar lá) e `PAYMENT_MODE=real`.
+
+Não me peça para colar os valores no prompt — cole diretamente na Vercel
+(`vercel env add`) ou no painel; eu nunca preciso ver o valor em si.
+
+### Como funciona
+
+- `src/server/payment/mercadopago.ts`: cria e consulta pagamentos via
+  `POST/GET https://api.mercadopago.com/v1/payments`, sem SDK.
+- `src/server/payment/mercadoPagoWebhookSignature.ts`: valida `x-signature`
+  antes de qualquer processamento — sem `MERCADOPAGO_WEBHOOK_SECRET`
+  configurada, **todo** webhook é rejeitado (fail-closed).
+- `src/server/payment/mercadoPagoStatus.ts`: único lugar que traduz o
+  vocabulário do Mercado Pago para o estado interno do pedido.
+- `POST /api/webhooks/mercadopago`: única rota que aprova pagamento. Nunca
+  confiar no retorno do navegador — ver D60/D61 em `0004_Decisions.md`.
+
+### Validar em sandbox (antes de qualquer credencial real)
+
+1. Com `PAYMENT_MODE=real` e as credenciais de teste, criar uma carta e ir
+   até o checkout.
+2. **Pix**: gerar o QR Code de teste; usar o
+   [simulador de pagamentos do Mercado Pago](https://www.mercadopago.com.br/developers/pt/docs/checkout-api-orders/integration-test/pix)
+   para aprovar/rejeitar/expirar.
+3. **Cartão**: usar um [cartão de teste](https://www.mercadopago.com.br/developers/pt/docs/checkout-bricks/integration-test)
+   do Mercado Pago (nunca um cartão real em sandbox).
+4. Confirmar que o webhook chegou (logs da Vercel:
+   `[webhook][mercadopago] processado`) e que a carta foi publicada **só**
+   depois disso, não no clique do botão.
+5. Repetir o mesmo pagamento de teste (reenviar a notificação pelo painel,
+   se disponível) e confirmar que não duplica publicação, slug nem e-mail.
+6. Registrar os IDs de teste gerados (pedido, `providerPaymentId`) para
+   referência — não é preciso limpar o ambiente de teste do Mercado Pago,
+   ele é isolado da produção por definição.
+
+### Antes de trocar para credenciais de produção
+
+Repita os passos 1–5 acima com credenciais de **produção** do Mercado Pago
+(conta aprovada/homologada) mas ainda com um valor baixo/simbólico, **só
+depois** de eu autorizar explicitamente. Nunca troque `MERCADOPAGO_ACCESS_TOKEN`
+de teste para produção sem essa autorização — ver seção 16.
+
+### Suporte e estorno
+
+- **Ver o estado de um pagamento**: painel do Mercado Pago (busca por
+  `external_reference` = id do pedido) ou `provider.getPaymentStatus(providerPaymentId)`.
+- **Estornar**: pelo painel do Mercado Pago (Atividade → o pagamento →
+  Devolver). O webhook de `refunded` chega automaticamente e move o pedido
+  para `REFUNDED` — nenhuma ação manual no banco é necessária.
+- **Contestação (chargeback)**: o Mercado Pago notifica via webhook
+  (`charged_back`); o pedido some da vitrine de "válidos" mas o registro
+  fica no banco para consulta/suporte.
+- **Pedido "preso" em `PENDING`**: confira o painel do Mercado Pago pelo
+  `providerPaymentId` — se lá já estiver `approved` e o webhook não chegou
+  (raro), rode manualmente uma consulta com `getPaymentStatus` e, se
+  confirmado, decida com cautela se vale reenviar a notificação pelo painel
+  do Mercado Pago em vez de escrever direto no banco.
+
+---
+
+## 15. Resend — e-mail transacional (task 013 — Fase 3)
+
+### Checkpoints que dependem de você
+
+1. Criar/autenticar a conta em <https://resend.com>.
+2. Adicionar e verificar o domínio de envio (Resend → Domains → Add Domain).
+   Sugestão de remetente: `cartas@anterosistemas.com.br` (ou um subdomínio
+   dedicado, ex. `send.anterosistemas.com.br`, se preferir isolar reputação).
+3. O Resend fornece os registros DNS exatos (tipo, nome, valor, TTL) — não
+   altero o DNS automaticamente; aguardo você configurar na Cloudflare e
+   confirmar.
+4. Depois de propagado, clicar "Verify" no painel do Resend e confirmar:
+   SPF, DKIM e (se configurado) DMARC como **verificados**.
+5. Copiar a API key → `RESEND_API_KEY`, e configurar `EMAIL_FROM` com o
+   remetente completo, ex.: `Antero Cartas <cartas@anterosistemas.com.br>`.
+6. Configurar as duas variáveis na Vercel (Production) e `EMAIL_MODE=real`.
+
+### Como funciona
+
+- `src/server/email/resend.ts`: `POST https://api.resend.com/emails`, sem
+  SDK — mesmo critério do Mercado Pago e do Supabase Storage.
+- `src/server/email/render.ts`: template único, usado também pelo mock —
+  nunca diverge entre o que se vê em dev (`/api/dev/emails`) e o que é
+  enviado de verdade.
+- Reprocessamento de falha: `npx tsx scripts/reprocessFailedEmails.ts`
+  (dry run por padrão; `--confirm` para reenviar de fato). Ver seção 12 da
+  task 013 e D65.
+
+### Validar
+
+1. Com `EMAIL_MODE=real` e domínio verificado, publicar uma carta de teste
+   (via sandbox do Mercado Pago) e confirmar o e-mail chegando na caixa de
+   entrada (não em spam) com: nome do comprador, link, QR Code, plano,
+   prazo, canal de suporte e aviso para guardar o link.
+2. Confirmar que **não** contém: token de edição, CPF, dados de pagamento,
+   texto integral da carta.
+3. Forçar uma falha (ex.: e-mail de destino inválido) e confirmar que
+   `EmailDelivery.status` vira `FAILED` sem desfazer a publicação da carta.
+4. Rodar `scripts/reprocessFailedEmails.ts --confirm` e confirmar o reenvio.
+
+---
+
+## 16. Checklist de ativação de produção (task 013, seção 19)
+
+Antes de trocar qualquer credencial de teste para produção:
+
+- [ ] Conta do Mercado Pago aprovada/homologada
+- [ ] Credenciais de produção do Mercado Pago obtidas (ainda não coladas)
+- [ ] Webhook configurado com a URL pública e testado em produção real
+- [ ] Assinatura do webhook validada (evento real chega e é aceito)
+- [ ] Domínio de e-mail verificado no Resend (SPF/DKIM/DMARC)
+- [ ] E-mail de teste entregue com sucesso (não em spam)
+- [ ] Smoke test sandbox completo aprovado (seção 14, "Validar em sandbox")
+- [ ] `RUN_DB_TESTS=true npm test` passando
+- [ ] Mocks continuam bloqueados (`ALLOW_MOCK_PAYMENT_CONFIRMATION` ausente
+      em Production, `DEV_EMAILS_ENABLED=false`)
+- [ ] Sentry ativo e validado
+- [ ] Analytics ativo
+- [ ] Canal de suporte definido (WhatsApp real, não `5599999999999`)
+- [ ] Termos e privacidade revisados para venda real
+- [ ] Valor dos planos confirmado com a Antero
+
+Só depois de marcar tudo acima, e **com autorização explícita**, executar em
+ordem:
+
+1. Trocar `MERCADOPAGO_ACCESS_TOKEN`/`NEXT_PUBLIC_MERCADOPAGO_PUBLIC_KEY`/
+   `MERCADOPAGO_WEBHOOK_SECRET` de teste para produção.
+2. Trocar `RESEND_API_KEY`/`EMAIL_FROM` para o remetente definitivo (se
+   ainda não era o mesmo do teste).
+3. Confirmar `PAYMENT_MODE=real` e `EMAIL_MODE=real` em Production.
+4. Novo deploy.
+5. Uma compra real de valor baixo, feita por você, ponta a ponta.
+6. Só então anunciar o produto como disponível para venda.
+
+Nunca pule a etapa 5 — é a única forma de confirmar que dinheiro de verdade
+resulta em carta publicada e e-mail entregue.
+
+## 17. Rollback (Fase 3)
+
+- **Voltar para mocks rapidamente**: `PAYMENT_MODE=mock` e `EMAIL_MODE=mock`
+  em Production + novo deploy. Pedidos já `PAID`/publicados não são afetados
+  — só pedidos novos passam a usar o mock de novo.
+- **Webhook com problema**: como toda a lógica é idempotente (D60), é seguro
+  desligar e religar `MERCADOPAGO_WEBHOOK_SECRET` ou mesmo recriar o webhook
+  no painel — nenhuma notificação reprocessada duplica efeito.
+- **Migration**: a migration desta fase (`CHARGED_BACK` + `PaymentEvent`) é
+  puramente aditiva; não há rollback de schema necessário mesmo revertendo
+  o código para antes da Fase 3.
