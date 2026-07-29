@@ -5,7 +5,14 @@ import { site } from "@/config/site";
 import { buildPublicCartUrl } from "@/lib/publicUrl";
 import { publishCartWithClient } from "@/server/cartService";
 import { dbToDomainCart, type DbCartRow } from "@/lib/cartMapping";
-import { getPaymentProvider, isMockConfirmationAllowed } from "@/server/payment";
+import {
+  getPaymentProvider,
+  isMockConfirmationAllowed,
+  type InternalOrderStatus,
+  type PaymentStatus,
+  type PixPaymentData,
+} from "@/server/payment";
+import { mapMercadoPagoStatus, shouldApplyTransition } from "@/server/payment/mercadoPagoStatus";
 import { getEmailProvider } from "@/server/email";
 import { generateQrDataUrl } from "@/server/qrcode";
 import { verifyEditToken } from "@/lib/editToken";
@@ -17,7 +24,7 @@ const cartInclude = { media: { orderBy: { position: "asc" as const } } };
 export interface OrderSummary {
   id: string;
   cartId: string;
-  status: "PENDING" | "PAID" | "FAILED" | "REFUNDED" | "EXPIRED" | "CANCELLED";
+  status: "PENDING" | "PAID" | "FAILED" | "REFUNDED" | "EXPIRED" | "CANCELLED" | "CHARGED_BACK";
   planType: "LIMITED" | "PERMANENT";
   amount: number;
   currency: string;
@@ -110,18 +117,159 @@ export async function createOrder(
     return created;
   });
 
-  const payment = await provider.createPayment({
+  // Só o provider mock cria o "pagamento" já na criação do pedido — o
+  // método (MOCK) é fixo e não depende de escolha do comprador. Com o
+  // provider real, o comprador ainda vai escolher Pix ou cartão na tela de
+  // checkout; a criação do pagamento de verdade acontece em
+  // createPixPaymentAttempt/createCardPaymentAttempt, não aqui.
+  if (provider.name === "mock") {
+    const payment = await provider.createPayment({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      method: "MOCK",
+    });
+    const updated = await prisma.order.update({
+      where: { id: order.id },
+      data: { providerPaymentId: payment.providerPaymentId },
+    });
+    return toSummary(updated);
+  }
+
+  return toSummary(order);
+}
+
+// --- Tentativas de pagamento real (Pix / cartão) -----------------------------
+
+const RETRYABLE_STATUSES = new Set(["PENDING", "FAILED", "CANCELLED", "EXPIRED"]);
+
+/**
+ * Carrega o pedido autorizando pela mesma trilha de sempre (token de edição
+ * do rascunho — não existe login) e garante que ele ainda pode receber uma
+ * tentativa de pagamento. PAID/REFUNDED/CHARGED_BACK nunca são reabertos.
+ */
+async function loadRetryableOrder(orderId: string, token: string | null) {
+  if (!token) throw new ApiError("unauthorized", "Token de edição ausente.");
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { cart: true } });
+  if (!order) throw new ApiError("not_found", "Pedido não encontrado.");
+  if (!verifyEditToken(token, order.cart.editTokenHash)) {
+    throw new ApiError("unauthorized", "Token de edição inválido.");
+  }
+  if (!RETRYABLE_STATUSES.has(order.status)) {
+    throw new ApiError(
+      "forbidden_state",
+      "Este pedido já foi concluído e não pode ser pago novamente.",
+    );
+  }
+  return order;
+}
+
+export interface PixAttemptResult {
+  order: OrderSummary;
+  pix: PixPaymentData;
+}
+
+/**
+ * Cria (ou recria, se a tentativa anterior expirou/falhou) um pagamento Pix
+ * para o pedido. Pode ser chamada mais de uma vez para o mesmo pedido — cada
+ * chamada é uma nova cobrança Pix no Mercado Pago; não há deduplicação de
+ * cliques duplos aqui (o botão do cliente já evita reenvio — ver
+ * CheckoutClient), então trate isso como limitação conhecida, não bug.
+ */
+export async function createPixPaymentAttempt(
+  orderId: string,
+  token: string | null,
+): Promise<PixAttemptResult> {
+  const order = await loadRetryableOrder(orderId, token);
+  const provider = getPaymentProvider();
+
+  const result = await provider.createPayment({
     orderId: order.id,
     amount: order.amount,
     currency: order.currency,
-    method: "MOCK",
+    method: "PIX",
+    payer: {
+      name: order.customerName,
+      email: order.customerEmail,
+      document: order.customerDocument ?? undefined,
+    },
   });
+  if (!result.pix) {
+    throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
+  }
+
   const updated = await prisma.order.update({
     where: { id: order.id },
-    data: { providerPaymentId: payment.providerPaymentId },
+    data: {
+      status: "PENDING",
+      paymentMethod: "PIX",
+      provider: provider.name,
+      providerPaymentId: result.providerPaymentId,
+    },
   });
 
-  return toSummary(updated);
+  return { order: toSummary(updated), pix: result.pix };
+}
+
+export interface CardAttemptInput {
+  token: string;
+  installments: number;
+  paymentMethodId: string;
+  issuerId?: string;
+}
+
+export interface CardAttemptResult {
+  order: OrderSummary;
+  /**
+   * Resposta imediata do provedor — só para feedback de UX (ex.: "recusado,
+   * tente outro cartão"). NUNCA é o gatilho de publicação: a carta só é
+   * publicada quando o webhook confirmar (task 013, seção 9).
+   */
+  status: PaymentStatus;
+  statusDetail?: string;
+}
+
+/**
+ * Cria um pagamento de cartão a partir de um token gerado no navegador
+ * (Payment Brick) — o número do cartão nunca passa por este servidor. Pode
+ * ser chamada de novo para o mesmo pedido com um cartão diferente enquanto
+ * o pedido não estiver PAID/REFUNDED/CHARGED_BACK.
+ */
+export async function createCardPaymentAttempt(
+  orderId: string,
+  token: string | null,
+  card: CardAttemptInput,
+): Promise<CardAttemptResult> {
+  const order = await loadRetryableOrder(orderId, token);
+  const provider = getPaymentProvider();
+
+  const result = await provider.createPayment({
+    orderId: order.id,
+    amount: order.amount,
+    currency: order.currency,
+    method: "CARD",
+    payer: {
+      name: order.customerName,
+      email: order.customerEmail,
+      document: order.customerDocument ?? undefined,
+    },
+    card,
+  });
+
+  // Status fica PENDING independentemente da resposta síncrona do provedor —
+  // só o webhook decide o estado real do pedido.
+  await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      status: "PENDING",
+      paymentMethod: "CARD",
+      provider: provider.name,
+      providerPaymentId: result.providerPaymentId,
+    },
+  });
+  const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+
+  return { order: toSummary(updated), status: result.status, statusDetail: result.statusDetail };
 }
 
 export async function getOrderStatus(orderId: string): Promise<OrderSummary> {
@@ -188,30 +336,141 @@ export async function mockConfirmOrder(
   }
 
   // Guard atômico: só um caller vence a corrida (updateMany condicional).
-  const now = new Date();
-  const claim = await prisma.order.updateMany({
-    where: { id: orderId, status: "PENDING" },
-    data: { status: "PAID", paidAt: now },
-  });
-
-  if (claim.count === 0) {
+  const claimed = await finalizeOrderAsPaid(existing);
+  if (!claimed) {
     // Outra requisição confirmou entre a leitura e a escrita: idempotente.
     const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     return buildResultFromExisting(finalOrder);
   }
 
-  const publishedRow = await prisma.$transaction((tx) =>
-    publishCartWithClient(tx, existing.cartId, now),
-  );
+  const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+  return { order: toSummary(finalOrder), ...claimed };
+}
 
+/**
+ * Núcleo idempotente de "aprovar um pagamento": claim atômico (só quem
+ * efetivamente tira o pedido de PENDING publica), publicação transacional e
+ * outbox de e-mail único. Reusado por `mockConfirmOrder` (Fase 2) e pelo
+ * webhook do Mercado Pago (task 013) — o **único** outro lugar que pode
+ * marcar um pedido como pago é a confirmação mock, que já tem seu próprio
+ * guard de `PAYMENT_MODE`/`ALLOW_MOCK_PAYMENT_CONFIRMATION`.
+ *
+ * Devolve `false` se outra chamada concorrente já resolveu o pedido — nada é
+ * republicado nem reenviado.
+ */
+async function finalizeOrderAsPaid(order: {
+  id: string;
+  cartId: string;
+  customerName: string;
+  customerEmail: string;
+}): Promise<false | { cart: Cart; publicUrl: string; qrCodeDataUrl: string | null }> {
+  const now = new Date();
+  const claim = await prisma.order.updateMany({
+    where: { id: order.id, status: "PENDING" },
+    data: { status: "PAID", paidAt: now },
+  });
+  if (claim.count === 0) return false;
+
+  const publishedRow = await prisma.$transaction((tx) =>
+    publishCartWithClient(tx, order.cartId, now),
+  );
   const cart = dbToDomainCart(publishedRow as unknown as DbCartRow);
   const publicUrl = buildPublicCartUrl(cart.slug!);
   const qrCodeDataUrl = await generateQrDataUrl(publicUrl);
 
-  await deliverPublishedEmail(orderId, existing.customerName, existing.customerEmail, cart, publicUrl, qrCodeDataUrl);
+  await deliverPublishedEmail(
+    order.id,
+    order.customerName,
+    order.customerEmail,
+    cart,
+    publicUrl,
+    qrCodeDataUrl,
+  );
 
-  const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-  return { order: toSummary(finalOrder), cart, publicUrl, qrCodeDataUrl };
+  return { cart, publicUrl, qrCodeDataUrl };
+}
+
+// --- Webhook do Mercado Pago (task 013, seção 9) -----------------------------
+
+export interface MercadoPagoWebhookInput {
+  provider: string;
+  /** Id da notificação em si (não o id do pagamento) — chave de idempotência. */
+  providerEventId: string;
+  providerPaymentId: string;
+  externalReference: string | null;
+  status: string;
+  statusDetail: string | null;
+  type: string;
+}
+
+export type WebhookOutcome =
+  | { kind: "duplicate" }
+  | { kind: "unknown_order" }
+  | { kind: "stale_attempt" }
+  | { kind: "no_transition" }
+  | { kind: "applied"; internalStatus: InternalOrderStatus };
+
+/**
+ * Aplica uma notificação de webhook já com assinatura validada (a validação
+ * roda na rota, antes de chamar esta função). É a **única** fonte de verdade
+ * para aprovar um pagamento — nunca o retorno do navegador, query string,
+ * redirecionamento ou polling do front.
+ *
+ * Ordem das checagens, cada uma cobrindo um caso da seção 9 da task 013:
+ * 1. idempotência — `PaymentEvent` único por (provider, providerEventId);
+ *    inserir de novo o mesmo evento falha e vira "duplicate" sem reprocessar;
+ * 2. pedido desconhecido — `external_reference` não bate com nenhum pedido;
+ * 3. tentativa superada — o pagamento da notificação não é o mais recente
+ *    registrado no pedido (ex.: 2ª tentativa de cartão já está em andamento);
+ * 4. fora de ordem — a transição não é permitida a partir do estado atual
+ *    (`shouldApplyTransition`), ex.: notificação atrasada de "pending"
+ *    chegando depois de o pedido já ter sido aprovado.
+ */
+export async function applyMercadoPagoWebhook(
+  input: MercadoPagoWebhookInput,
+): Promise<WebhookOutcome> {
+  const order = input.externalReference
+    ? await prisma.order.findUnique({ where: { id: input.externalReference } })
+    : null;
+
+  try {
+    await prisma.paymentEvent.create({
+      data: {
+        orderId: order?.id ?? null,
+        provider: input.provider,
+        providerEventId: input.providerEventId,
+        type: input.type,
+        providerPaymentId: input.providerPaymentId,
+        rawStatus: input.status,
+      },
+    });
+  } catch {
+    return { kind: "duplicate" };
+  }
+
+  if (!order) return { kind: "unknown_order" };
+
+  if (order.providerPaymentId && order.providerPaymentId !== input.providerPaymentId) {
+    return { kind: "stale_attempt" };
+  }
+
+  const nextStatus = mapMercadoPagoStatus(input.status, input.statusDetail);
+  if (!shouldApplyTransition(order.status as InternalOrderStatus, nextStatus)) {
+    return { kind: "no_transition" };
+  }
+
+  if (nextStatus === "PAID") {
+    await finalizeOrderAsPaid(order);
+  } else {
+    // Mesmo guard otimista do claim de pagamento: só aplica se o estado
+    // ainda for o que líamos há pouco (evita corrida com outro processo).
+    await prisma.order.updateMany({
+      where: { id: order.id, status: order.status },
+      data: { status: nextStatus },
+    });
+  }
+
+  return { kind: "applied", internalStatus: nextStatus };
 }
 
 async function buildResultFromExisting(existing: {
