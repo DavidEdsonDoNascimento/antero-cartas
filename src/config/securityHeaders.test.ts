@@ -35,6 +35,22 @@ describe("Content-Security-Policy — recursos do produto", () => {
     expect(imgSrc).toContain("blob:");
   });
 
+  it("libera os domínios do Payment Brick só com paymentMode 'real'", () => {
+    const real = buildContentSecurityPolicy({ ...PROD, paymentMode: "real" });
+    expect(directive(real, "script-src")).toContain("https://*.mercadopago.com");
+    expect(directive(real, "script-src")).toContain("https://*.mlstatic.com");
+    expect(directive(real, "connect-src")).toContain("https://*.mercadopago.com");
+    expect(directive(real, "frame-src")).toContain("https://*.mercadopago.com");
+    expect(directive(real, "style-src")).toContain("https://*.mercadopago.com");
+    expect(directive(real, "font-src")).toContain("https://*.mlstatic.com");
+  });
+
+  it("não cita o Mercado Pago em modo mock (nada do Brick é carregado)", () => {
+    const mock = buildContentSecurityPolicy({ ...PROD, paymentMode: "mock" });
+    expect(mock).not.toContain("mercadopago.com");
+    expect(mock).not.toContain("mlstatic.com");
+  });
+
   it("permite o envio de erro ao host do DSN do Sentry", () => {
     expect(directive(buildContentSecurityPolicy(PROD), "connect-src")).toContain(
       "https://o123456.ingest.us.sentry.io",

@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
           isProduction,
           supabaseUrl: process.env.SUPABASE_URL,
           sentryDsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+          paymentMode: process.env.PAYMENT_MODE === "real" ? "real" : "mock",
         }),
       },
     ];

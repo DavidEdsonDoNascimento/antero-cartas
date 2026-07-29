@@ -12,6 +12,8 @@ import { site } from "@/config/site";
 import { flags } from "@/config/flags";
 import { track } from "@/lib/analytics";
 import { PrimaryButton } from "@/components/create/ui";
+import { PixPaymentPanel } from "@/components/checkout/PixPaymentPanel";
+import { CardPaymentPanel } from "@/components/checkout/CardPaymentPanel";
 
 type State =
   | { step: "loading" }
@@ -89,6 +91,16 @@ export function CheckoutClient({ cartId }: { cartId: string }) {
   }
 
   if (state.step === "paying") {
+    if (flags.PAYMENT_MODE === "real") {
+      return (
+        <RealPaymentPanel
+          order={state.order}
+          token={state.token}
+          onBack={() => setState({ step: "form", cart: state.cart, token: state.token })}
+          onDone={(orderId) => router.push(`/pedido/${orderId}/sucesso`)}
+        />
+      );
+    }
     if (!flags.MOCK_PAYMENT_CONFIRMATION_ENABLED) {
       return (
         <PaymentUnavailablePanel
@@ -278,6 +290,49 @@ function PaymentUnavailablePanel({ onBack }: { onBack: () => void }) {
         onClick={onBack}
         className="mt-6 inline-block text-sm font-medium text-vinho underline"
       >
+        Voltar
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Escolha entre Pix e cartão (task 013, seção 11). O pedido já existe com
+ * preço/plano definidos pelo servidor; esta tela só decide o método.
+ */
+function RealPaymentPanel({
+  order,
+  token,
+  onBack,
+  onDone,
+}: {
+  order: OrderSummary;
+  token: string;
+  onBack: () => void;
+  onDone: (orderId: string) => void;
+}) {
+  const [method, setMethod] = useState<"choose" | "pix" | "card">("choose");
+
+  if (method === "pix") {
+    return <PixPaymentPanel order={order} token={token} onDone={onDone} />;
+  }
+  if (method === "card") {
+    return <CardPaymentPanel order={order} token={token} onDone={onDone} />;
+  }
+
+  return (
+    <div className="mx-auto max-w-md px-4 py-10 text-center">
+      <h1 className="text-2xl font-semibold text-vinho">Como você quer pagar?</h1>
+      <div className="mt-6 space-y-3">
+        <PrimaryButton onClick={() => setMethod("pix")}>💠 Pagar com Pix</PrimaryButton>
+        <button
+          onClick={() => setMethod("card")}
+          className="block w-full rounded-full border border-rosa/40 px-6 py-3 text-sm font-medium text-grafite/70 transition hover:bg-rosa-soft/40"
+        >
+          💳 Pagar com cartão
+        </button>
+      </div>
+      <button onClick={onBack} className="mt-6 text-sm font-medium text-vinho underline">
         Voltar
       </button>
     </div>

@@ -17,6 +17,7 @@
  * | Sentry                      | host do DSN, quando configurado     |
  * | QR Code                     | data: (PNG gerado no servidor)      |
  * | preview de foto antes do envio | blob: (URL.createObjectURL)      |
+ * | Payment Brick (cartão)      | *.mercadopago.com/*.mlstatic.com, só com PAYMENT_MODE=real |
  */
 
 export interface SecurityHeaderOptions {
@@ -26,6 +27,12 @@ export interface SecurityHeaderOptions {
   supabaseUrl?: string;
   /** DSN do Sentry, se configurado — só o host é usado. */
   sentryDsn?: string;
+  /**
+   * `"real"` libera os domínios do Payment Brick do Mercado Pago (task 013)
+   * — SDK, estilos e campos seguros de cartão. Fica de fora em modo mock:
+   * nada é carregado, então nada precisa ser permitido.
+   */
+  paymentMode?: "mock" | "real";
 }
 
 export interface HeaderEntry {
@@ -55,14 +62,31 @@ const YOUTUBE_THUMBNAILS = "https://i.ytimg.com";
 const YOUTUBE_PLAYER = ["https://www.youtube.com", "https://www.youtube-nocookie.com"];
 /** Script do Vercel Web Analytics em desenvolvimento; em produção é same-origin. */
 const VERCEL_ANALYTICS_DEV = "https://va.vercel-scripts.com";
+/**
+ * Domínios do Payment Brick (SDK, estilos e campos seguros de cartão) —
+ * confirmados contra o próprio time do Mercado Pago, não supostos.
+ */
+const MERCADOPAGO_DOMAINS = ["https://*.mercadopago.com", "https://*.mlstatic.com"];
 
 export function buildContentSecurityPolicy(options: SecurityHeaderOptions): string {
   const { isProduction } = options;
   const supabaseOrigin = toOrigin(options.supabaseUrl) ?? SUPABASE_FALLBACK;
   const sentryOrigin = toOrigin(options.sentryDsn);
+  const mercadoPagoEnabled = options.paymentMode === "real";
 
   const scriptSrc = ["'self'"];
   const connectSrc = ["'self'", supabaseOrigin];
+  const styleSrc = ["'self'", "'unsafe-inline'"];
+  const fontSrc = ["'self'", "data:"];
+  const frameSrc = [...YOUTUBE_PLAYER];
+
+  if (mercadoPagoEnabled) {
+    scriptSrc.push(...MERCADOPAGO_DOMAINS);
+    styleSrc.push(...MERCADOPAGO_DOMAINS);
+    fontSrc.push(...MERCADOPAGO_DOMAINS);
+    connectSrc.push(...MERCADOPAGO_DOMAINS);
+    frameSrc.push(...MERCADOPAGO_DOMAINS);
+  }
 
   if (!isProduction) {
     // Turbopack/HMR avaliam código em desenvolvimento e o pacote de analytics
@@ -90,11 +114,11 @@ export function buildContentSecurityPolicy(options: SecurityHeaderOptions): stri
     "default-src": ["'self'"],
     "script-src": scriptSrc,
     // Tailwind e next/font emitem estilo inline; sem isto a página fica sem CSS.
-    "style-src": ["'self'", "'unsafe-inline'"],
+    "style-src": styleSrc,
     "img-src": ["'self'", "data:", "blob:", supabaseOrigin, YOUTUBE_THUMBNAILS],
-    "font-src": ["'self'", "data:"],
+    "font-src": fontSrc,
     "connect-src": connectSrc,
-    "frame-src": YOUTUBE_PLAYER,
+    "frame-src": frameSrc,
     "media-src": ["'self'"],
     "worker-src": ["'self'", "blob:"],
     "manifest-src": ["'self'"],

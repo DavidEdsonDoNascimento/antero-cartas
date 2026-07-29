@@ -147,7 +147,7 @@ export function reorderPhotos(
 export interface OrderSummary {
   id: string;
   cartId: string;
-  status: "PENDING" | "PAID" | "FAILED" | "REFUNDED" | "EXPIRED" | "CANCELLED";
+  status: "PENDING" | "PAID" | "FAILED" | "REFUNDED" | "EXPIRED" | "CANCELLED" | "CHARGED_BACK";
   planType: "LIMITED" | "PERMANENT";
   amount: number;
   currency: string;
@@ -198,5 +198,45 @@ export function mockConfirm(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ action }),
+  });
+}
+
+// --- Pagamento real (Mercado Pago) — task 013 -------------------------------
+
+export interface PixPaymentData {
+  qrCode: string;
+  qrCodeBase64: string;
+  expiresAt: string | null;
+}
+
+export function createPixPayment(
+  orderId: string,
+  token: string,
+): Promise<{ order: OrderSummary; pix: PixPaymentData }> {
+  return request(`/api/orders/${orderId}/payments/pix`, {
+    method: "POST",
+    token,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export interface CardPaymentInput {
+  token: string;
+  installments: number;
+  paymentMethodId: string;
+  issuerId?: string;
+}
+
+export function createCardPayment(
+  orderId: string,
+  token: string,
+  card: CardPaymentInput,
+): Promise<{ order: OrderSummary; status: "pending" | "paid" | "failed" | "expired"; statusDetail?: string }> {
+  return request(`/api/orders/${orderId}/payments/card`, {
+    method: "POST",
+    token,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(card),
   });
 }
