@@ -304,3 +304,218 @@ caso de borda (compressão falhar/ser pulada), não o caminho feliz.
 cliente, tempo de preview otimista, comportamento em rede móvel, e o **limite
 de payload da função serverless da Vercel** (~4,5 MB por requisição) — só se
 confirma depois do deploy real com um upload de fato passando pela Vercel.
+
+---
+
+## 8. Domínio e DNS — `cartas.anterosistemas.com.br`
+
+### Situação atual (2026-07-29)
+
+O subdomínio já foi **adicionado ao projeto `antero-cartas`** na Vercel, e a
+propriedade do domínio já está verificada (`anterosistemas.com.br` está na
+mesma conta Vercel desde 2026-04-29). Falta apenas o registro DNS.
+
+Ponto de atenção descoberto nesta fase: o DNS de `anterosistemas.com.br`
+**não** está na Vercel — os nameservers apontam para a **Cloudflare**
+(`mustafa.ns.cloudflare.com`, `sarah.ns.cloudflare.com`). Os registros que
+`vercel dns ls` mostra para esse domínio não são autoritativos e não têm
+efeito nenhum. O apex e o `www` pertencem a outro projeto (`dnsistemas`) —
+criar `cartas.` não conflita com eles.
+
+### Registro a criar (na Cloudflare)
+
+| Campo | Valor |
+|---|---|
+| Tipo | `CNAME` |
+| Nome / Host | `cartas` |
+| Destino / Target | `0d681018f5545bb0.vercel-dns-017.com` |
+| TTL | Auto |
+| Proxy (nuvem laranja) | **DESLIGADO** — "DNS only" (nuvem cinza) |
+
+O proxy precisa ficar desligado: a própria Vercel devolve `disableProxy: true`
+para este registro. Com o proxy da Cloudflare ligado, a emissão do certificado
+pela Vercel falha.
+
+Alternativa aceita pela Vercel, caso o CNAME não seja possível:
+`A cartas -> 216.198.79.1` (secundário `64.29.17.1`).
+
+### Depois que o DNS estiver criado
+
+1. Confirmar propagação e emissão do certificado:
+
+       npx vercel domains inspect cartas.anterosistemas.com.br
+       npx vercel domains verify cartas.anterosistemas.com.br
+
+2. Conferir o HTTPS de fato:
+
+       curl -sI https://cartas.anterosistemas.com.br | head -1
+
+3. Trocar a URL pública (Production apenas):
+
+       npx vercel env rm NEXT_PUBLIC_SITE_URL production
+       printf 'https://cartas.anterosistemas.com.br' | npx vercel env add NEXT_PUBLIC_SITE_URL production
+
+4. Novo deploy — a URL é lida em build time:
+
+       npx vercel --prod
+
+5. Revalidar canonical, `og:image`, `sitemap.xml` (as três URLs devem usar o
+   domínio novo), compartilhamento por WhatsApp e QR Code.
+
+**QR Codes gerados antes desta troca não são definitivos** — apontam para
+`antero-cartas.vercel.app`.
+
+---
+
+## 9. Sentry
+
+Integração pronta e **desligada por falta de DSN**. Sem DSN, `init` não é
+chamado, nenhuma requisição sai e a aplicação funciona normalmente.
+
+Para ligar:
+
+1. Criar conta no Sentry (plano Developer, gratuito) e um projeto **Next.js**.
+2. Copiar o DSN do projeto.
+3. Configurar na Vercel, **somente em Production**, e publicar:
+
+       printf '<DSN>' | npx vercel env add NEXT_PUBLIC_SENTRY_DSN production
+       npx vercel --prod
+
+O DSN é público por natureza (vai no bundle do cliente) e só permite
+**escrever** eventos — por isso o prefixo `NEXT_PUBLIC_` está correto e não
+expõe segredo. `SENTRY_DSN` (sem prefixo) existe para o servidor usar um
+projeto separado, se um dia fizer sentido; vazia, usa a mesma do cliente.
+
+Depois de configurar, a CSP passa a incluir o host do DSN em `connect-src`
+automaticamente (derivado da variável no build) — não é preciso editar nada.
+
+**O que é sanitizado antes de sair** (`src/lib/sentryPrivacy.ts`): corpo da
+requisição inteiro, cookies, query string, cabeçalhos fora da lista de
+permitidos (`authorization` e `x-cart-edit-token` são removidos), URLs com
+identificador privado (`/c/<slug>` vira `/c/[slug]`), e e-mail, CPF, telefone,
+bearer e token longo em qualquer texto livre. Session Replay é desligado —
+gravaria o texto da carta sendo digitado.
+
+**Não validado ponta a ponta:** sem DSN não foi possível confirmar o
+recebimento real de um evento. Ao configurar, verificar no painel do Sentry
+que o primeiro evento chega **já sanitizado**.
+
+---
+
+## 10. Analytics
+
+Vercel Web Analytics — gratuito no Hobby (50 mil eventos/mês), sem cookie,
+sem credencial. O script é servido pela própria origem.
+
+Passo manual (uma vez, gratuito): painel da Vercel -> projeto `antero-cartas`
+-> **Analytics** -> **Enable**. Sem esse toggle, o `<Analytics />` já está no
+`layout.tsx` mas a plataforma não coleta.
+
+**Limitação do plano gratuito:** eventos personalizados exigem plano Pro. No
+Hobby só o **pageview** é coletado. Os cerca de 25 `track()` do produto
+continuam funcionando (e logando em dev), mas só são encaminhados se
+`NEXT_PUBLIC_ANALYTICS_CUSTOM_EVENTS_ENABLED=true` — desligado por padrão.
+
+Para desligar o analytics por completo: `NEXT_PUBLIC_ANALYTICS_ENABLED=false`.
+
+**Privacidade:** `beforeSend` mascara `/c/<slug>`, `/pedido/<id>` e
+`/checkout/<id>` e descarta query string e fragmento — sem isso o link privado
+da carta sairia do navegador, porque o Web Analytics registra a URL completa
+de cada pageview.
+
+---
+
+## 11. SEO e compartilhamento
+
+| Recurso | Onde | Observação |
+|---|---|---|
+| `sitemap.xml` | `src/app/sitemap.ts` | só `/`, `/criar`, `/demonstracao` |
+| `robots.txt` | `src/app/robots.ts` | bloqueia `/c/`, `/pedido/`, `/checkout/` |
+| Imagem OG | `src/app/opengraph-image.tsx` | 1200x630 PNG, gerada em build |
+| Card do X | `src/app/twitter-image.tsx` | reexporta a mesma arte |
+| Canonical | `src/app/layout.tsx` | relativo, acompanha `NEXT_PUBLIC_SITE_URL` |
+
+Nada aqui precisa ser regenerado manualmente: tudo é derivado de
+`NEXT_PUBLIC_SITE_URL` e de `src/config/site.ts` no build.
+
+---
+
+## 12. Headers de segurança
+
+Definidos em `src/config/securityHeaders.ts` e aplicados a todas as rotas por
+`next.config.ts`. Ver D57 para o raciocínio, em especial o `'unsafe-inline'`.
+
+Conferir em produção:
+
+    curl -sI https://cartas.anterosistemas.com.br/ | grep -i -E "content-security-policy|x-content-type|x-frame|referrer|permissions|strict-transport"
+
+**Se um recurso parar de carregar depois de mudar a CSP**, o navegador diz
+exatamente qual diretiva bloqueou (console: "violates the following Content
+Security Policy directive"). Os domínios legítimos estão tabelados no
+cabeçalho de `src/config/securityHeaders.ts`; qualquer adição precisa de
+motivo registrado.
+
+Atenção ao adicionar fornecedor novo: script externo, fonte externa ou pixel
+de marketing exigirão nova diretiva — e nenhum deles foi previsto nesta fase.
+
+---
+
+## 13. Checklist manual — dispositivos físicos
+
+Não executável por mim: depende de aparelho e rede reais. Preencher com o
+resultado observado, não com o esperado.
+
+> Fazer **depois** que o domínio definitivo estiver no ar; antes disso, os
+> links e QR Codes ainda apontam para `antero-cartas.vercel.app`.
+
+### Entrada no fluxo
+
+| Item | Android | iPhone |
+|---|---|---|
+| Tempo até `/criar` mostrar interface | | |
+| Skeleton aparece (sem tela branca) | | |
+| Nova carta **não** traz dados da carta anterior | | |
+| Retomar rascunho é uma escolha explícita | | |
+
+### Fotos
+
+| Item | 1 foto | 3 fotos | 6 fotos |
+|---|---|---|---|
+| Preview aparece imediatamente | | | |
+| Tempo até o upload concluir (Wi-Fi) | | | |
+| Tempo até o upload concluir (rede móvel) | | | |
+| Erro exibido com clareza quando falha | | | |
+| Checkout bloqueia enquanto há upload pendente | | | |
+
+Anotar também, para pelo menos uma foto real de cada aparelho: tamanho
+original, resolução original, tamanho depois da compressão e resolução final.
+
+### Checkout e pagamento
+
+| Item | Resultado |
+|---|---|
+| Painel de simulação **não** aparece em produção | |
+| Mensagem de pagamento indisponível aparece | |
+| Botão "Voltar" retorna ao formulário | |
+| Dados da carta são preservados ao voltar | |
+| Tela de sucesso sai do loading (estado terminal) | |
+| Tempo aproximado até o estado terminal | |
+
+### Carta pública e compartilhamento
+
+| Item | Resultado |
+|---|---|
+| QR Code lido pela câmera abre a carta | |
+| Link abre no WhatsApp | |
+| Preview do WhatsApp mostra a imagem Open Graph | |
+| Cadeado de HTTPS válido no navegador | |
+| Música do YouTube toca na carta aberta | |
+| Fotos aparecem na carta aberta | |
+
+### Rede
+
+| Item | Wi-Fi | Rede móvel |
+|---|---|---|
+| Landing abre em tempo aceitável | | |
+| Upload de foto conclui | | |
+| Carta pública abre | | |

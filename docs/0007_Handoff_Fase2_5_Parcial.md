@@ -1,5 +1,24 @@
 # 0007 — Handoff parcial · Fase 2.5 (Etapa 4 — Deploy) · 2026-07-24
 
+> **SUPERADO em 2026-07-29.** O handoff definitivo da Fase 2.5 é
+> `docs/0008_Handoff_Fase2_5_Final.md` — use aquele. Este arquivo fica como
+> registro histórico da sessão de 2026-07-24 e **não** reflete mais o estado
+> atual.
+>
+> O que mudou desde então, em resumo:
+>
+> - A pendência 1 (push) estava, na verdade, **já resolvida**: os commits de
+>   2026-07-24 já estavam em `origin/master`.
+> - Pendências 3 e 4 (domínio na Vercel e registro DNS) **concluídas** — o
+>   subdomínio foi adicionado e o registro exato está na seção 8 do runbook.
+>   A criação do registro na Cloudflare continua sendo ação manual.
+> - Pendências 10 a 13 (Sentry, analytics, imagem Open Graph, headers)
+>   **concluídas**.
+> - Pendência 16 (itens 2.1–2.9) **concluída**: smoke test de produção
+>   somente-leitura, 31/31.
+> - Pendência 15 (handoff definitivo) **concluída**.
+> - Pendências 2, 5–9 e 14 continuam abertas, todas dependendo de ação sua.
+>
 > Handoff **parcial** — não é o "Handoff final" da Fase 2.5 (seção 14 de
 > `docs/tasks/011_fase_2_5.md`), que só deve ser criado ao final de toda a
 > fase. Este documento existe para retomar o trabalho amanhã sem perder

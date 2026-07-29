@@ -470,3 +470,100 @@ apontando para `localhost`. Confirmado nesta fase: build local com
 `APP_ENV=production` e URL localhost falha com mensagem clara; com a URL real
 (`https://cartas.anterosistemas.com.br`), o mesmo build passa. Testado em
 `src/config/site.test.ts` e `src/lib/publicUrl.test.ts`.
+
+## D55 — Vercel Web Analytics, com máscara obrigatória de URL privada
+Escolhido o Vercel Web Analytics como destino dos eventos (task 011, seção
+9.2). Critérios: gratuito no plano Hobby (50 mil eventos/mês), **sem cookie**
+(o visitante é identificado por um hash da requisição, descartado em 24h),
+sem credencial nova para gerenciar, e o script é servido pela **própria
+origem** (`/_vercel/insights/…`) — o que evita abrir um domínio a mais na CSP.
+Alternativas descartadas: Plausible e Simple Analytics são pagos; GoatCounter
+tem plano gratuito só para uso não comercial; Umami exigiria hospedar mais um
+serviço (fora do escopo) ou uma conta e credencial externas.
+
+**Risco tratado:** o Web Analytics registra a **URL completa** de cada
+pageview, e este produto tem identificador privado no caminho — `/c/<slug>` é
+o link exclusivo da carta. Sem tratamento, o link privado sairia do navegador
+para um terceiro. `beforeSend` (em `src/components/analytics/WebAnalytics.tsx`)
+mascara `/c/`, `/pedido/` e `/checkout/` e descarta query string e fragmento
+antes do envio. As propriedades de evento passam por
+`sanitizeAnalyticsProps`, que filtra por nome de chave (nome, e-mail, CPF,
+telefone, título, mensagem, token, slug, URL) e por formato de valor.
+
+**Limitação aceita conscientemente:** eventos personalizados exigem plano Pro
+— no Hobby só o pageview é coletado. Como contratar plano pago está fora do
+escopo, o encaminhamento dos ~25 `track()` do produto fica atrás de
+`NEXT_PUBLIC_ANALYTICS_CUSTOM_EVENTS_ENABLED`, desligado por padrão. O adapter
+está pronto: ligar a variável basta, sem tocar em nenhum ponto de chamada.
+
+## D56 — Sentry opcional, com remoção por padrão em vez de lista de bloqueio
+A integração (`instrumentation.ts`, `instrumentation-client.ts`) só chama
+`init` quando existe DSN. Sem DSN nada é enviado e a aplicação funciona igual
+— é o que permite rodar local, em CI e em produção antes de existir a conta,
+sem `try/catch` espalhado pelo código.
+
+A sanitização (`src/lib/sentryPrivacy.ts`) **remove por padrão** em vez de
+tentar listar o que é perigoso: o corpo da requisição é descartado inteiro
+(é por onde a carta viaja — título, mensagem, assinatura — e por onde vão nome,
+e-mail e telefone do comprador); cookies e query string são descartados; dos
+cabeçalhos só sobrevive uma lista curta de permitidos (`authorization` e
+`x-cart-edit-token` caem aqui); e em texto livre (mensagem, exceção,
+breadcrumb) e-mail, CPF, telefone, bearer e token longo são substituídos.
+`user` e `extra` são removidos; `contexts` é preservado porque o SDK o
+preenche com navegador/SO/runtime, que ajuda a diagnosticar sem identificar
+ninguém.
+
+Session Replay é filtrado na inicialização: gravaria a tela de criação, isto
+é, o texto da carta sendo digitado — nenhuma máscara daria garantia
+suficiente. `tracesSampleRate` fica em 0 (a cota gratuita é pequena e nesta
+fase só erro interessa) e o upload de source map fica desligado (exigiria
+`SENTRY_AUTH_TOKEN`, que não temos e não é necessário para receber erros).
+
+## D57 — CSP com `'unsafe-inline'` em script-src, e por quê
+A CSP (`src/config/securityHeaders.ts`) foi montada a partir dos domínios
+levantados no código, não por suposição: Supabase Storage (origem derivada de
+`SUPABASE_URL`) para as fotos, `i.ytimg.com` para a miniatura,
+`www.youtube.com` no `frame-src` para o player, `data:` para o QR Code,
+`blob:` para o preview antes do envio, e o host do DSN no `connect-src` quando
+o Sentry estiver configurado. Nenhuma diretiva usa `*` nem `https:`.
+
+`script-src` inclui `'unsafe-inline'`. É concessão consciente: o App Router
+injeta script inline com os dados de hidratação em toda página, e a única
+alternativa suportada é nonce por requisição, que exige middleware e tornaria
+**dinâmica toda rota** — inclusive a landing e a `/demonstracao`, hoje
+estáticas. Trocar a performance da porta de entrada do produto por essa
+diretiva não se justifica com o risco atual: não há login, não há sessão
+privilegiada e nenhum conteúdo de terceiro é renderizado como HTML (o texto da
+carta é renderizado como texto, e o único embed é o iframe do YouTube, com
+origem fixa). Reavaliar se a Fase 3 introduzir área autenticada.
+
+HSTS só em produção e **sem `preload`**: preload é praticamente irreversível e
+decidiria pelo domínio inteiro (`anterosistemas.com.br`), não só por este
+subdomínio. A chave do ambiente é `APP_ENV`, não `NODE_ENV`, pelo mesmo motivo
+de D49/D54.
+
+## D58 — Sitemap só com rota pública indexável
+`src/app/sitemap.ts` lista apenas `/`, `/criar` e `/demonstracao`. Ficam de
+fora `/c/[slug]`, `/pedido/*` e `/checkout/*` (o link da carta é privado e já
+está bloqueado em `robots.ts`) e também `/privacidade` e `/termos`, que
+declaram `robots: { index: false }` nas próprias páginas — listá-las
+contradiria a marcação. A montagem foi extraída em `buildSitemap` para ser
+testável sem depender do ambiente.
+
+A imagem Open Graph é gerada por código (`next/og`) em vez de um PNG
+versionado, para acompanhar automaticamente o nome e a tagline de
+`src/config/site.ts`. O envelope é desenhado em SVG: o truque de triângulo com
+`border` do CSS não é suportado pelo renderizador do `next/og` e saía como um
+retângulo cheio. Nenhum dado de usuário é renderizado na imagem — ela é
+pública e cacheada por terceiros.
+
+## D59 — `/api/dev/*` responde 404 em produção, não 403/409
+Encontrado no smoke test de produção desta fase: `GET /api/dev/emails` já era
+bloqueado (nenhum dado vazava), mas respondia 409 com "Indisponível em
+produção" — o que confirma a um visitante que o visualizador de e-mails existe
+e só está desligado. Passou a responder 404, como se a rota não existisse.
+
+O mapeamento compartilhado de `forbidden_state` **não** foi alterado: ele é
+usado por estados legítimos de negócio (carta não editável, carta já
+processada), onde 409 está correto. Fora de produção, `DEV_EMAILS_ENABLED=false`
+continua devolvendo 409 com mensagem útil — quem lê isso é o desenvolvedor.

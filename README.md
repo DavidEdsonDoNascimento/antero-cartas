@@ -172,17 +172,41 @@ mensagem clara em vez de falhar silenciosamente.
 - **Sessão do navegador**: no DevTools, remova a chave `antero:session` do
   `localStorage` para forçar a criação de um novo rascunho.
 
+## Produção
+
+A aplicação está publicada na Vercel. O domínio definitivo será
+`https://cartas.anterosistemas.com.br` (aguardando o registro DNS; até lá,
+`https://antero-cartas.vercel.app`).
+
+- **Observabilidade:** Sentry opcional — sem DSN, `init` não é chamado e nada
+  é enviado. Tudo que sai passa por `src/lib/sentryPrivacy.ts`, que descarta o
+  corpo da requisição, cookies e cabeçalhos sensíveis e mascara e-mail, CPF,
+  telefone, token e URL privada.
+- **Analytics:** Vercel Web Analytics — gratuito, sem cookie. As URLs privadas
+  (`/c/<slug>`, `/pedido/`, `/checkout/`) são mascaradas antes do envio.
+- **Headers:** CSP montada a partir dos domínios reais do código, mais
+  nosniff, anti-framing, `Referrer-Policy`, `Permissions-Policy` e HSTS em
+  produção — `src/config/securityHeaders.ts`.
+- **SEO:** `sitemap.ts` (só rotas públicas indexáveis), `robots.ts`, canonical
+  e imagem Open Graph gerada em build.
+
+Procedimentos operacionais (deploy, migrations, DNS, backup, limpeza de dados
+de teste, rollback) estão no runbook de produção.
+
 ## Documentação
 - [`docs/0001_Product_Brief.md`](docs/0001_Product_Brief.md) — problema, público, valor, jornada
 - [`docs/0002_MVP_Plan.md`](docs/0002_MVP_Plan.md) — fases e critérios de aceite
 - [`docs/0003_Architecture.md`](docs/0003_Architecture.md) — stack e estrutura
 - [`docs/0004_Decisions.md`](docs/0004_Decisions.md) — decisões e valores provisórios
 - [`docs/0005_ChangeLog.md`](docs/0005_ChangeLog.md) — histórico de mudanças
+- [`docs/0006_Runbook_Producao.md`](docs/0006_Runbook_Producao.md) — runbook de produção e checklist manual
+- [`docs/0008_Handoff_Fase2_5_Final.md`](docs/0008_Handoff_Fase2_5_Final.md) — estado final da Fase 2.5
 
 ## Configuração central
 - `src/config/site.ts` — marca, copy e posicionamento
 - `src/config/plans.ts` — planos e preços (centavos; autoritativo no servidor)
 - `src/config/flags.ts` — feature flags (`AI_WRITING_ASSISTANT`, `PAYMENT_MODE`)
+- `src/config/securityHeaders.ts` — CSP e headers de segurança (função pura, testada)
 - `src/lib/limits.ts` — `MAX_CART_PHOTOS` e limites de texto (fonte única)
 - `src/content/themes.ts` — temas dirigidos por tokens
 - `src/content/*` — destinatários, ocasiões, temas, modelos, FAQ, depoimentos

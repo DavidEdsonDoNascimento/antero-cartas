@@ -1,5 +1,71 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.5] — Observabilidade, analytics, SEO e headers de segurança — 2026-07-29
+
+Fecha o trabalho técnico da Fase 2.5 (task 011, etapas 5 e 6). Nenhum item da
+Fase 3 foi iniciado: pagamento e e-mail seguem em modo mock.
+
+### Adicionado
+- **SEO** — `src/app/sitemap.ts` (só `/`, `/criar` e `/demonstracao`; rotas
+  privadas e páginas `noindex` ficam de fora), imagem Open Graph 1200x630
+  gerada por código com a paleta da marca (`src/app/opengraph-image.tsx`),
+  mesma arte reexportada para o card do X (`twitter-image.tsx`), canonical
+  relativo e `twitter:card=summary_large_image` no `layout.tsx`. Ver D58.
+- **Analytics** — Vercel Web Analytics: gratuito no Hobby, sem cookie,
+  servido pela própria origem. `beforeSend` mascara `/c/<slug>`, `/pedido/` e
+  `/checkout/` e descarta query string antes do envio — sem isso o link
+  privado da carta sairia do navegador. `sanitizeAnalyticsProps` filtra as
+  propriedades de evento por chave e por formato de valor. Ver D55.
+- **Sentry** — integração opcional cliente/servidor/edge. Sem DSN, `init` não
+  é chamado e nada é enviado. Sanitização remove o corpo da requisição
+  inteiro, cookies, query string e cabeçalhos fora da lista de permitidos, e
+  substitui e-mail/CPF/telefone/token em texto livre. Session Replay
+  desligado. Ver D56.
+- **Headers de segurança** — CSP montada a partir dos domínios reais do
+  código (Supabase Storage, `i.ytimg.com`, `www.youtube.com`, `data:`,
+  `blob:`, host do DSN), sem `*` nem `https:`; mais nosniff, `X-Frame-Options:
+  DENY` + `frame-ancestors 'none'`, `Referrer-Policy`, `Permissions-Policy` e
+  HSTS só em produção, sem `preload`. Ver D57.
+- **Domínio** — `cartas.anterosistemas.com.br` adicionado ao projeto
+  `antero-cartas` na Vercel. A propriedade do domínio já está verificada; falta
+  só o registro DNS, que precisa ser criado na Cloudflare (ação manual).
+
+### Corrigido
+- `GET /api/dev/emails` respondia 409 "Indisponível em produção", confirmando
+  a existência da rota. Agora responde 404. Nenhum dado vazava antes; a
+  correção é sobre não revelar a superfície. Ver D59.
+
+### Validado
+- **Testes:** `npm run lint`, `npm run typecheck` e `npm run build` limpos;
+  `npm test` com 204/204 (7 pulados sem banco) e `RUN_DB_TESTS=true npm test`
+  com **211/211 passando** contra o Postgres local. 61 testes novos nesta
+  entrada (sitemap 5, analyticsPrivacy 13, sentryPrivacy 19, securityHeaders
+  20, rota dev 4).
+- **CSP em navegador real** contra o build local: as 5 rotas públicas
+  renderizam sem violação e sem erro de página; a miniatura do YouTube
+  carrega; e o controle negativo confirma que a política é aplicada de fato —
+  `fetch` e `iframe` para origem não listada são bloqueados, `/api/carts`
+  continua permitido.
+- **Smoke test de produção (somente leitura): 31/31.** HTTPS, canonical,
+  `og:image`, sitemap sem rota privada, robots, headers, `mock-confirm` 403,
+  `/api/dev/emails` 404, resposta de pedido sem token nem e-mail, e nenhum
+  segredo nos 11 bundles do cliente (939 KB baixados e varridos por service
+  role, JWT do Supabase, string de conexão e chave do YouTube).
+- **Logs da Vercel** durante o smoke test: só `info`, nenhum erro.
+- **Preview e Development** continuam com zero variáveis de ambiente —
+  confirmado por `vercel env ls`; não conseguem alcançar o banco de produção.
+
+### Não executado (aguarda ação externa)
+- Remoção dos dados de teste remotos — dry run repetido nesta sessão, saída
+  idêntica à documentada (0 mídia e 0 e-mail nos dois carts). **Nada foi
+  removido:** a autorização explícita ainda não foi dada.
+- DNS de `cartas.anterosistemas.com.br` (Cloudflare) e, na sequência, a troca
+  de `NEXT_PUBLIC_SITE_URL` para o domínio definitivo.
+- DSN do Sentry — código pronto e variável documentada.
+- Testes físicos em Android/iPhone e rede móvel — checklist entregue em
+  `docs/0006_Runbook_Producao.md`.
+
+
 ## [Fase 2.5] — Checkout travava em "Confirmando seu pagamento…" em produção — 2026-07-24
 
 ### Contexto (incidente)
