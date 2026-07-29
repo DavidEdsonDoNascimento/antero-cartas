@@ -1,12 +1,13 @@
 import type { EmailProvider } from "./EmailProvider";
 import { createMockEmailProvider } from "./mock";
+import { createResendEmailProvider } from "./resend";
+
+export function getEmailMode(): "mock" | "real" {
+  return (process.env.EMAIL_MODE ?? "mock") === "real" ? "real" : "mock";
+}
 
 export function getEmailProvider(): EmailProvider {
-  const mode = process.env.EMAIL_MODE ?? "mock";
-  if (mode !== "mock") {
-    throw new Error("Somente o provedor de e-mail mock está disponível nesta fase.");
-  }
-  return createMockEmailProvider();
+  return getEmailMode() === "real" ? createResendEmailProvider() : createMockEmailProvider();
 }
 
 export type { EmailProvider } from "./EmailProvider";
