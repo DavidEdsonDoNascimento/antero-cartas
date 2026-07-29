@@ -1,5 +1,14 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
+import { buildSecurityHeaders } from "./src/config/securityHeaders";
+
+/**
+ * Mesmo critério do guard de URL pública (D49/D54): a chave é APP_ENV, não
+ * NODE_ENV — `npm run build` roda com NODE_ENV=production inclusive
+ * localmente, e usar NODE_ENV ligaria HSTS num `next start` de verificação
+ * em http://localhost.
+ */
+const isProduction = process.env.APP_ENV?.trim() === "production";
 
 const nextConfig: NextConfig = {
   images: {
@@ -7,6 +16,19 @@ const nextConfig: NextConfig = {
       // Miniaturas de música do YouTube exibidas no preview.
       { protocol: "https", hostname: "i.ytimg.com" },
     ],
+  },
+  async headers() {
+    return [
+      {
+        // Vale para tudo, inclusive rotas de API e a carta pública.
+        source: "/:path*",
+        headers: buildSecurityHeaders({
+          isProduction,
+          supabaseUrl: process.env.SUPABASE_URL,
+          sentryDsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+        }),
+      },
+    ];
   },
 };
 
