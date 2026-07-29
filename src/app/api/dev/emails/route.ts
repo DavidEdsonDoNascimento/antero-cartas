@@ -9,8 +9,11 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request): Promise<Response> {
   try {
+    // 404 e não 403/409: em produção esta rota deve se comportar como se não
+    // existisse. Responder "desativado" confirmaria a um visitante que o
+    // visualizador de e-mails existe e só está desligado.
     if (process.env.NODE_ENV === "production") {
-      throw new ApiError("forbidden_state", "Indisponível em produção.");
+      throw new ApiError("not_found", "Rota não encontrada.");
     }
     if ((process.env.DEV_EMAILS_ENABLED ?? "true") === "false") {
       throw new ApiError("forbidden_state", "Visualizador de e-mails desativado.");
