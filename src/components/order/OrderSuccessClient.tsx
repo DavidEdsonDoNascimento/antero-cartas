@@ -130,6 +130,7 @@ function PaidView({
   const shareText = `Preparei uma cartinha especial para você 💌 ${publicUrl}`;
 
   useEffect(() => {
+    track("letter_published", { plan: planType });
     if (qrCodeDataUrl) track("qr_code_viewed", {});
     // Compra concluída: encerra a sessão E o cache local de recuperação
     // (antero:draft é atualizado a cada autosave, inclusive desta carta já
@@ -137,7 +138,7 @@ function PaidView({
     // sem herdar campos desta.
     clearSession();
     clearDraft();
-  }, [qrCodeDataUrl]);
+  }, [qrCodeDataUrl, planType]);
 
   async function copy() {
     try {
@@ -211,6 +212,9 @@ function PaidView({
   );
 }
 
+/** Um pedido já pago que foi revertido depende de suporte, não de "tentar de novo". */
+const POST_PAYMENT_REVERSALS = new Set(["REFUNDED", "CHARGED_BACK"]);
+
 function FailedView({
   status,
   cartId,
@@ -218,12 +222,42 @@ function FailedView({
   status: string;
   cartId: string;
 }) {
+  useEffect(() => {
+    if (!POST_PAYMENT_REVERSALS.has(status)) track("payment_failed", { status });
+  }, [status]);
+
+  if (POST_PAYMENT_REVERSALS.has(status)) {
+    const label =
+      status === "REFUNDED"
+        ? "Este pedido foi estornado."
+        : "Este pedido está em contestação de pagamento (chargeback).";
+    return (
+      <div className="mx-auto max-w-md px-4 py-24 text-center">
+        <div className="mb-3 text-4xl">📩</div>
+        <p className="text-grafite/70">{label}</p>
+        <p className="mt-2 text-sm text-grafite/50">
+          Se não reconhece esse resultado, fale com o nosso suporte.
+        </p>
+        <a
+          href={whatsappShareUrl("Olá! Preciso de ajuda com meu pedido.", site.whatsappSupport)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-4 inline-block text-vinho underline"
+        >
+          Falar no WhatsApp
+        </a>
+      </div>
+    );
+  }
+
   const label =
     status === "FAILED"
       ? "O pagamento não foi aprovado."
-      : status === "EXPIRED"
-        ? "O tempo para pagamento expirou."
-        : "Não foi possível concluir o pedido.";
+      : status === "CANCELLED"
+        ? "O pagamento foi cancelado."
+        : status === "EXPIRED"
+          ? "O tempo para pagamento expirou."
+          : "Não foi possível concluir o pedido.";
 
   return (
     <div className="mx-auto max-w-md px-4 py-24 text-center">
