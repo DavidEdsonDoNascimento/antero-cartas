@@ -19,7 +19,7 @@
  * ser removido, já que a relação é `onDelete: SetNull`, não `Cascade`).
  */
 import { randomUUID } from "node:crypto";
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 
 const RUN = process.env.RUN_DB_TESTS === "true" && !!process.env.DATABASE_URL;
 const DB_TIMEOUT = 60_000;
@@ -335,3 +335,69 @@ describe.skipIf(!RUN)("Fase 3 — tentativas de pagamento (integração)", { tim
     });
   });
 });
+
+describe.skipIf(!RUN)(
+  "Fase 3 — falha de e-mail não desfaz a publicação (task 013, seção 17)",
+  { timeout: DB_TIMEOUT },
+  () => {
+    let prisma: typeof import("@/lib/db").prisma;
+    const cartIdsToClean: string[] = [];
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      for (const cartId of cartIdsToClean) {
+        const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
+        await prisma.paymentEvent.deleteMany({ where: { orderId: { in: orders.map((o) => o.id) } } });
+        await prisma.order.deleteMany({ where: { cartId } });
+        await prisma.cart.deleteMany({ where: { id: cartId } });
+      }
+      await prisma.$disconnect();
+    }, DB_TIMEOUT);
+
+    it("publica a carta mesmo quando o provedor de e-mail falha (Resend sem credencial)", async () => {
+      // EMAIL_MODE=real sem RESEND_API_KEY faz o provider real lançar assim
+      // que tentar enviar — força exatamente o caso "e-mail falha" sem mock.
+      vi.stubEnv("EMAIL_MODE", "real");
+      vi.stubEnv("RESEND_API_KEY", "");
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      const orderService = await import("@/server/orderService");
+
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: "Email falha",
+        message: "Mensagem de teste",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `email.falha.${RUN_ID}@example.com`,
+        acceptTerms: true,
+      });
+
+      const result = await orderService.mockConfirmOrder(order.id, "success");
+
+      expect(result.order.status).toBe("PAID");
+      expect(result.cart?.status).toBe("PUBLISHED");
+      expect(result.cart?.slug).toBeTruthy();
+
+      const delivery = await prisma.emailDelivery.findUniqueOrThrow({
+        where: { orderId_type: { orderId: order.id, type: "cart_published" } },
+      });
+      expect(delivery.status).toBe("FAILED");
+
+      const cartRow = await prisma.cart.findUniqueOrThrow({ where: { id: cart.id } });
+      expect(cartRow.status).toBe("PUBLISHED");
+      expect(cartRow.slug).toBe(result.cart?.slug);
+    });
+  },
+);
