@@ -40,15 +40,21 @@ describe("isMockConfirmationAllowed", () => {
 });
 
 describe("getPaymentProvider", () => {
-  it("só oferece o provider mock nesta fase", async () => {
+  it("modo mock devolve o provider mock", async () => {
     vi.stubEnv("PAYMENT_MODE", "mock");
     const { getPaymentProvider } = await loadPayment();
-    expect(() => getPaymentProvider()).not.toThrow();
+    expect(getPaymentProvider().name).toBe("mock");
   });
 
-  it("recusa modo 'real' — ainda não existe provedor real (Fase 3)", async () => {
+  it("modo real devolve o provider Mercado Pago (task 013)", async () => {
     vi.stubEnv("PAYMENT_MODE", "real");
     const { getPaymentProvider } = await loadPayment();
-    expect(() => getPaymentProvider()).toThrow(/mock/);
+    expect(getPaymentProvider().name).toBe("mercadopago");
+  });
+
+  it("qualquer valor diferente de 'real' cai para mock (fail-safe)", async () => {
+    vi.stubEnv("PAYMENT_MODE", "banana");
+    const { getPaymentProvider } = await loadPayment();
+    expect(getPaymentProvider().name).toBe("mock");
   });
 });
