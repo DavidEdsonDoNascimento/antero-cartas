@@ -38,6 +38,7 @@ enum OrderStatus {
   REFUNDED
   EXPIRED
   CANCELLED
+  CHARGED_BACK
 }
 
 enum PaymentMethod {
@@ -132,9 +133,33 @@ model Order {
   updatedAt DateTime @updatedAt
 
   emailDeliveries EmailDelivery[]
+  paymentEvents   PaymentEvent[]
 
   @@index([cartId])
   @@index([status])
+}
+
+/// Registro bruto de cada notificação de webhook processada, por pedido.
+/// Fonte de idempotência (nunca reaplica o mesmo evento duas vezes) e de
+/// rastreabilidade (histórico de tentativas, inclusive superadas por uma
+/// tentativa de pagamento mais recente do mesmo pedido). Não guarda dado
+/// pessoal do pagador — só o necessário para decidir e auditar a transição
+/// de estado.
+model PaymentEvent {
+  id                String   @id @default(cuid())
+  orderId           String?
+  order             Order?   @relation(fields: [orderId], references: [id])
+  provider          String
+  /// Id da notificação do provedor (não o id do pagamento) — chave de
+  /// deduplicação real, já que o mesmo pagamento pode gerar várias notificações.
+  providerEventId   String
+  type              String
+  providerPaymentId String?
+  rawStatus         String?
+  createdAt         DateTime @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([orderId])
 }
 
 model EmailDelivery {
