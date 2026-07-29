@@ -8,12 +8,16 @@
 ## 1. Resumo
 
 O trabalho **técnico** da Fase 2.5 está concluído, **incluindo o domínio
-definitivo**, que entrou no ar em 2026-07-29 com certificado válido.
+definitivo**, que entrou no ar em 2026-07-29 com certificado válido, e o
+**Sentry**, configurado, reimplantado e parcialmente validado no mesmo dia
+(seção 7).
 
 Os dados de teste em produção foram removidos com sua autorização (seção 12).
 
-Restam duas ações que dependem de você (colar o DSN do Sentry no prompt e
-rodar o checklist em aparelho físico) — nenhuma bloqueada por código.
+Resta uma ação que depende de você — rodar o checklist em aparelho físico
+(seção 13) — nenhuma bloqueada por código. A validação ponta a ponta do
+Sentry também tem um item pendente de confirmação sua (seção 7), sem bloquear
+nenhuma outra parte da fase.
 
 A Fase 3 **não** foi iniciada: não existe pagamento real, webhook nem e-mail
 real. Nenhum serviço pago foi contratado, nenhum projeto Supabase novo foi
@@ -145,8 +149,13 @@ de conexão do banco ou chave da API do YouTube.
 
 ## 7. Sentry
 
-Implementado e **desligado por falta de DSN** — sem DSN, `init` não é chamado,
-nada é enviado e a aplicação funciona igual.
+**Configurado em Production desde 2026-07-29** (`NEXT_PUBLIC_SENTRY_DSN`,
+adicionada manualmente por você só em Production; confirmado ausente em
+Preview e Development). Novo deployment (`dpl_3ttrqvkadzK4EW9hioKPbDotgqdq`,
+19:58:35 UTC) posterior à criação da variável, embutindo-a no build: CSP em
+`connect-src` passou a incluir `https://o4511820149358592.ingest.us.sentry.io`
+e o bundle do cliente contém o mesmo host — confirmado por mim contra o
+domínio definitivo.
 
 Cobre cliente, servidor e edge. `onRequestError` captura erro não tratado de
 rota de API, Server Component e renderização, o que cobre de uma vez falha de
@@ -157,9 +166,37 @@ upload e erro de criação de pedido.
 Sanitização em `src/lib/sentryPrivacy.ts` (19 testes). Ver D56 e a seção 9 do
 runbook.
 
-**Não validado ponta a ponta** — sem DSN não dá para confirmar recebimento
-real. Ao configurar, conferir no painel que o primeiro evento chega **já
-sanitizado**.
+### Validação controlada — parcial
+
+`scripts/sentryValidationEvent.ts` (script local, não rota pública, não botão
+de teste) enviou um evento identificado. **Confirmado:** DSN, envio e
+sanitização funcionam ponta a ponta — `commit` e `origin=phase-2.5-validation`
+chegaram corretos, nenhum dado pessoal ou segredo.
+
+O primeiro envio saiu com `environment=local`: bug do script (tag customizada
+duplicando o campo nativo, que na real vem de `APP_ENV`/`SENTRY_ENVIRONMENT`),
+não do Sentry. Corrigido — o script agora reusa a mesma resolução de ambiente
+da aplicação e aborta se `APP_ENV` não resolver para `production` (testado
+localmente com DSN falso).
+
+Você rodou o script corrigido fora da sessão do Claude. Confirmado por você:
+nenhum arquivo temporário sobrou e as variáveis foram removidas da sessão
+depois; `server_name` mostrou sua máquina local, como esperado. **Os valores
+exatos desse segundo evento — `environment=production`, `commit`, `origin`,
+`flushed` — ainda não foram confirmados com dados reais** (o checklist
+recebido trouxe os campos em branco, mesmo padrão do incidente registrado em
+`docs/0007_Handoff_Fase2_5_Parcial.md`). Não registro esse item como validado
+sem confirmação explícita sua.
+
+**Não comprovado, e não será forçado:** captura de um erro real originado no
+runtime serverless da Vercel — o script roda localmente, então `server_name`
+nunca vai mostrar a Vercel. Não é motivo para criar rota pública ou forçar
+erro em produção.
+
+**Não use `vercel env pull` para obter o DSN** — a Vercel CLI só sabe
+entregar o valor escrevendo em arquivo, sem modo somente-memória. Para
+qualquer nova validação, copie o valor direto do painel da Vercel e cole
+apenas no comando local.
 
 ## 8. Analytics
 
@@ -312,12 +349,13 @@ acima.
 
 | # | O que | Por que preciso de você |
 |---|---|---|
-| 1 | Colar o DSN no prompt de `vercel env add` | credencial externa |
-| 2 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
+| 1 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
+| 2 | Confirmar os valores reais do 2º evento de validação do Sentry (`environment=production`, `commit`, `origin`, `flushed`) | só você viu o painel/terminal; não registro "sim" sem confirmação |
 
 Concluídos por você em 2026-07-29: CNAME na Cloudflare, ativação do Web
-Analytics e autorização da limpeza dos dados de teste. Todos validados por mim
-logo em seguida.
+Analytics, autorização da limpeza dos dados de teste, criação/configuração do
+DSN do Sentry em Production, e execução do script de validação corrigido.
+Todos validados por mim logo em seguida (Sentry: parcialmente — ver seção 7).
 
 ## 14. Limitações e riscos conhecidos
 
@@ -357,11 +395,19 @@ criado. Nenhuma rota que gere erro de propósito foi criada.
 
 ## 16. Como retomar
 
-### Se você tem o DSN do Sentry
+### Se você quiser confirmar de vez a validação do Sentry
 
-    Leia a seção 9 de docs/0006_Runbook_Producao.md. Configure
-    NEXT_PUBLIC_SENTRY_DSN em Production, faça novo deploy e confirme no
-    painel do Sentry que o primeiro evento chega já sanitizado.
+    Rode scripts/sentryValidationEvent.ts (instruções no próprio arquivo —
+    copie o DSN direto do painel da Vercel, nunca via `vercel env pull`) e
+    reporte os valores reais de environment, commit, origin e flushed do
+    evento no painel do Sentry. Sem essa confirmação, o item fica registrado
+    como pendente na seção 7 e 13, sem bloquear o resto da fase.
+
+### Se você quiser comprovar captura de erro real do runtime da Vercel
+
+    Isso só é possível com um erro genuíno de produção — não crie rota
+    pública nem force um erro artificialmente. Fica registrado como
+    limitação conhecida (seção 7) até que aconteça organicamente.
 
 ## 17. Próxima fase recomendada
 

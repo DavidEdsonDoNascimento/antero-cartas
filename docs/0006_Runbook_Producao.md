@@ -401,25 +401,22 @@ definitivo.
 
 ## 9. Sentry
 
-Integração pronta e **desligada por falta de DSN**. Sem DSN, `init` não é
-chamado, nenhuma requisição sai e a aplicação funciona normalmente.
+**Configurado em Production desde 2026-07-29.** `NEXT_PUBLIC_SENTRY_DSN` foi
+adicionada manualmente na Vercel (só em Production; Preview e Development
+seguem com zero variáveis) e o redeploy que a embutiu no build já foi feito.
 
-Para ligar:
-
-1. Criar conta no Sentry (plano Developer, gratuito) e um projeto **Next.js**.
-2. Copiar o DSN do projeto.
-3. Configurar na Vercel, **somente em Production**, e publicar:
-
-       printf '<DSN>' | npx vercel env add NEXT_PUBLIC_SENTRY_DSN production
-       npx vercel --prod
+Sem DSN, `init` não é chamado, nenhuma requisição sai e a aplicação funciona
+normalmente — continua valendo para desenvolvimento local (`.env.local` não
+define nenhuma variável de Sentry, de propósito).
 
 O DSN é público por natureza (vai no bundle do cliente) e só permite
 **escrever** eventos — por isso o prefixo `NEXT_PUBLIC_` está correto e não
 expõe segredo. `SENTRY_DSN` (sem prefixo) existe para o servidor usar um
 projeto separado, se um dia fizer sentido; vazia, usa a mesma do cliente.
 
-Depois de configurar, a CSP passa a incluir o host do DSN em `connect-src`
-automaticamente (derivado da variável no build) — não é preciso editar nada.
+A CSP inclui o host do DSN em `connect-src` automaticamente (derivado da
+variável no build) — confirmado em produção:
+`https://o4511820149358592.ingest.us.sentry.io`.
 
 **O que é sanitizado antes de sair** (`src/lib/sentryPrivacy.ts`): corpo da
 requisição inteiro, cookies, query string, cabeçalhos fora da lista de
@@ -428,9 +425,37 @@ identificador privado (`/c/<slug>` vira `/c/[slug]`), e e-mail, CPF, telefone,
 bearer e token longo em qualquer texto livre. Session Replay é desligado —
 gravaria o texto da carta sendo digitado.
 
-**Não validado ponta a ponta:** sem DSN não foi possível confirmar o
-recebimento real de um evento. Ao configurar, verificar no painel do Sentry
-que o primeiro evento chega **já sanitizado**.
+### Validação controlada (2026-07-29)
+
+`scripts/sentryValidationEvent.ts` envia um único evento identificado
+("Fase 2.5 — validação controlada do Sentry — production") usando a mesma
+configuração de `src/lib/sentryOptions.ts`. Não é rota pública nem botão de
+teste: script local, rodado manualmente, uma vez.
+
+**Confirmado:** DSN, envio e sanitização funcionam ponta a ponta — o primeiro
+evento chegou com `commit` e `origin=phase-2.5-validation` corretos, sem
+nenhum dado pessoal ou segredo. Esse primeiro evento saiu com
+`environment=local` por um bug do script (tag customizada duplicando o campo
+nativo, que na verdade vem de `SENTRY_ENVIRONMENT` /
+`APP_ENV`) — corrigido: o script agora reusa a mesma resolução de ambiente da
+aplicação e **aborta** se `APP_ENV` não resolver para `production`.
+
+**Pendente de confirmação:** os valores exatos do segundo evento (depois da
+correção) — `environment=production`, `commit`, `origin` e `flushed` — ainda
+não foram confirmados por você com dados reais (checklist recebido com campos
+em branco). Não considerar esse item validado até confirmação explícita.
+
+**Não comprovado, e não será forçado:** captura de um erro real originado no
+runtime serverless da Vercel. O script roda localmente, então `server_name`
+sempre mostra a máquina onde rodou, nunca a Vercel — isso é esperado, não é
+falha. Só um erro real em produção comprovaria a captura pelo runtime; não
+criar rota pública nem forçar erro em produção só para obter essa prova.
+
+**Importante — nunca use `vercel env pull` para obter o DSN.** A Vercel CLI só
+sabe entregar o valor escrevendo em arquivo; não existe modo somente-memória.
+Para qualquer nova validação, copie o valor diretamente do painel da Vercel
+(Project -> Settings -> Environment Variables -> Production -> revelar) e
+cole apenas no comando local — nunca em `.env*`, log ou documentação.
 
 ---
 

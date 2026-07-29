@@ -1,5 +1,87 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.5] — Redeploy com Sentry ativo e validação controlada — 2026-07-29
+
+Retomada depois de indisponibilidade da API do Claude. `NEXT_PUBLIC_SENTRY_DSN`
+já tinha sido criada manualmente em Production antes da interrupção; esta
+sessão fez o redeploy que faltava e validou o resultado.
+
+### Auditoria de retomada
+
+Confirmado antes de qualquer ação: `master` sincronizado com `origin/master`
+no commit `c358a34`, working tree limpo, nada executado parcialmente. A
+variável `NEXT_PUBLIC_SENTRY_DSN` existia em Production havia poucos minutos,
+criada **depois** do último deployment — ou seja, ainda não estava no build
+publicado.
+
+### Redeploy
+
+Novo deployment de produção (`dpl_3ttrqvkadzK4EW9hioKPbDotgqdq`, 2026-07-29
+19:58:35 UTC), posterior à criação da variável. Validado contra
+`https://cartas.anterosistemas.com.br`:
+- `/` e `/criar` respondem 200;
+- `Content-Security-Policy` (`connect-src`) passou a incluir
+  `https://o4511820149358592.ingest.us.sentry.io`, confirmando que o host do
+  DSN foi derivado corretamente no build;
+- o bundle do cliente (`_next/static/chunks/0_g8gh2pwtsob.js`) contém o mesmo
+  host, confirmando que `NEXT_PUBLIC_SENTRY_DSN` foi embutido na build do
+  cliente;
+- `.env.local` continua sem nenhuma variável de Sentry — desenvolvimento local
+  segue sem DSN, como projetado (D56).
+
+### Validação controlada (script local, não rota pública)
+
+Criado `scripts/sentryValidationEvent.ts`: envia um único evento
+(`Sentry.captureMessage`) usando a mesma configuração/sanitização de
+`src/lib/sentryOptions.ts`, com as tags `commit` e `origin=phase-2.5-validation`.
+Não é uma rota pública nem um botão de teste — script local, executado
+manualmente, uma vez por você.
+
+**Primeira tentativa:** o evento chegou ao Sentry com `commit=c358a34` e
+`origin=phase-2.5-validation` corretos, e nenhum dado pessoal ou segredo —
+confirmando que o DSN, o envio e a sanitização funcionam ponta a ponta. Porém
+o campo nativo `environment` saiu como `local`, não `production`.
+
+**Causa raiz:** o script original colocava `environment` como *tag* customizada
+(`tags: { environment: ... }`), mas o campo que o painel do Sentry mostra é o
+**nativo**, definido em `Sentry.init({ environment })` — que vem de
+`SENTRY_ENVIRONMENT = process.env.APP_ENV?.trim() || "local"`
+(`src/lib/sentryOptions.ts`). Como `APP_ENV` não estava de fato definida como
+`production` no processo que rodou o script, o valor caiu no fallback `local`.
+
+**Correção:** removida a tag duplicada; o script passou a reutilizar
+`SENTRY_ENVIRONMENT` diretamente (a mesma resolução da aplicação) e a **abortar**
+se ela não for exatamente `"production"`, em vez de enviar um evento com o
+ambiente errado de novo. Testado localmente com um DSN falso: o guard aborta
+corretamente antes de qualquer tentativa de envio.
+
+**Segunda tentativa:** executada por você fora da sessão do Claude, com
+`APP_ENV=production` explícito. Confirmado por você: nenhum arquivo temporário
+foi deixado para trás e as variáveis foram removidas da sessão depois do
+teste; `server_name` mostrou sua máquina local, como esperado para um script
+rodando fora da Vercel. **Os valores exatos de `environment`, `commit`,
+`origin` e `flushed` deste segundo evento ainda não foram confirmados** — a
+mensagem trouxe o modelo de checklist com os campos em branco
+(`[SIM/NÃO]`), o mesmo padrão já registrado no incidente de
+`docs/0007_Handoff_Fase2_5_Parcial.md`. Não registro esses campos como
+validados sem confirmação real.
+
+### Ajuste ao processo: não usar `vercel env pull` para o DSN
+
+A Vercel CLI só sabe entregar o valor de uma env var escrevendo em arquivo
+(`vercel env pull`) — não existe modo somente-memória. Por instrução explícita,
+esse comando não deve mais ser usado para obter o DSN. `scripts/sentryValidationEvent.ts`
+agora instrui copiar o valor diretamente do painel da Vercel e colar apenas no
+comando local, nunca em arquivo.
+
+### Ainda não comprovado
+
+A captura de um erro real originado no runtime serverless da Vercel continua
+sem confirmação — o script de validação roda localmente, então `server_name`
+nunca vai mostrar a Vercel. Não é motivo para criar rota pública nem forçar
+erro em produção; fica registrado como limitação conhecida da validação atual.
+
+
 ## [Fase 2.5] — Limpeza autorizada dos dados de teste em produção — 2026-07-29
 
 ### Removido (com autorização explícita, por ID)
