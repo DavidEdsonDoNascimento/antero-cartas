@@ -1,5 +1,52 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.5] — Domínio definitivo no ar e analytics ativo — 2026-07-29
+
+`https://cartas.anterosistemas.com.br` passou a ser a URL pública definitiva.
+
+### Alterado
+- `NEXT_PUBLIC_SITE_URL` (Production) trocada de `antero-cartas.vercel.app`
+  para `https://cartas.anterosistemas.com.br` às 19:15:26 UTC; novo deployment
+  de produção criado às 19:15:43 UTC — **posterior** à troca, como exige a
+  leitura da variável em build time. Nenhuma outra variável foi tocada: os
+  mocks seguem bloqueados (`ALLOW_MOCK_PAYMENT_CONFIRMATION=false`,
+  `DEV_EMAILS_ENABLED=false`, `PAYMENT_MODE=mock`, `EMAIL_MODE=mock`).
+
+### Adicionado
+- `scripts/checkQrDomain.ts`: roda o mesmo caminho de código da publicação
+  (`buildPublicCartUrl` + `generateQrDataUrl`) para conferir o QR Code sem
+  publicar nada nem tocar no banco.
+
+### Validado
+- **DNS**: `vercel domains verify` -> `configured-correctly` / `CNAME`;
+  Google e Cloudflare resolvem para os IPs da Vercel (`64.29.17.65`,
+  `216.198.79.65`), confirmando que o proxy da Cloudflare está desligado.
+- **Certificado**: Let's Encrypt, CN `cartas.anterosistemas.com.br`, cadeia
+  confiável, válido até 2026-10-27. A emissão levou alguns minutos — o
+  handshake falhou nas primeiras tentativas e depois estabilizou em 20/20
+  requisições bem-sucedidas em duas stacks TLS (schannel do curl e a do Node).
+- **Smoke test contra o domínio definitivo: 31/31.**
+- **URLs geradas**: canonical, `og:url`, `og:image`, `twitter:image`,
+  `sitemap.xml`, `robots.txt`, link de compartilhamento por WhatsApp e QR Code
+  usam todos o domínio novo. Nenhuma delas contém `localhost`, placeholder ou
+  `.vercel.app`. O alias `antero-cartas.vercel.app` continua respondendo (é o
+  padrão da plataforma), mas a aplicação não o gera.
+- **QR Code decodificado**, não apenas gerado: contém exatamente
+  `https://cartas.anterosistemas.com.br/c/seed-demonstracao`, sem token e sem
+  barra duplicada.
+- **Analytics ativado** no painel e validado ao vivo: os beacons de pageview
+  chegam, e o de `/c/seed-demonstracao` é enviado como `/c/[slug]` — o slug
+  real nunca sai do navegador. Registrado que o script ignora navegador
+  automatizado, o que faz o analytics parecer quebrado em teste headless.
+- **Carta pública** aberta em navegador contra o domínio definitivo, sem
+  nenhuma violação de CSP.
+- lint, typecheck e build limpos; **211/211** com `RUN_DB_TESTS=true`.
+
+### Continua pendente
+DSN do Sentry, autorização para remover os dados de teste (nada removido) e o
+checklist em aparelho físico.
+
+
 ## [Fase 2.5] — Observabilidade, analytics, SEO e headers de segurança — 2026-07-29
 
 Fecha o trabalho técnico da Fase 2.5 (task 011, etapas 5 e 6). Nenhum item da

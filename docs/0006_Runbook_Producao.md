@@ -309,11 +309,19 @@ confirma depois do deploy real com um upload de fato passando pela Vercel.
 
 ## 8. Domínio e DNS — `cartas.anterosistemas.com.br`
 
-### Situação atual (2026-07-29)
+### Situação atual (2026-07-29) — CONCLUÍDO
 
-O subdomínio já foi **adicionado ao projeto `antero-cartas`** na Vercel, e a
-propriedade do domínio já está verificada (`anterosistemas.com.br` está na
-mesma conta Vercel desde 2026-04-29). Falta apenas o registro DNS.
+**O domínio está no ar e é a URL pública definitiva.** O registro CNAME foi
+criado na Cloudflare, o certificado foi emitido pela Let's Encrypt e
+`NEXT_PUBLIC_SITE_URL` em Production aponta para
+`https://cartas.anterosistemas.com.br`.
+
+O histórico abaixo fica registrado porque o mesmo procedimento vale para
+qualquer domínio futuro.
+
+O subdomínio foi **adicionado ao projeto `antero-cartas`** na Vercel, e a
+propriedade do domínio já estava verificada (`anterosistemas.com.br` está na
+mesma conta Vercel desde 2026-04-29).
 
 Ponto de atenção descoberto nesta fase: o DNS de `anterosistemas.com.br`
 **não** está na Vercel — os nameservers apontam para a **Cloudflare**
@@ -363,7 +371,31 @@ Alternativa aceita pela Vercel, caso o CNAME não seja possível:
    domínio novo), compartilhamento por WhatsApp e QR Code.
 
 **QR Codes gerados antes desta troca não são definitivos** — apontam para
-`antero-cartas.vercel.app`.
+`antero-cartas.vercel.app` e precisam ser regerados. Nenhuma carta paga foi
+publicada até aqui (pagamento é Fase 3), então na prática não há QR Code
+antigo em circulação.
+
+### Como conferir o QR Code sem publicar nada
+
+`scripts/checkQrDomain.ts` roda o mesmo caminho de código da publicação
+(`buildPublicCartUrl` + `generateQrDataUrl`) e imprime a URL gerada, sem tocar
+no banco:
+
+    NEXT_PUBLIC_SITE_URL=https://cartas.anterosistemas.com.br APP_ENV=production \
+      npx tsx scripts/checkQrDomain.ts seed-demonstracao
+
+Validado em 2026-07-29 decodificando o PNG gerado: o QR Code contém
+exatamente `https://cartas.anterosistemas.com.br/c/seed-demonstracao` — sem
+`.vercel.app`, sem `localhost`, sem token e sem barra duplicada.
+
+### Observação sobre o domínio `.vercel.app`
+
+`antero-cartas.vercel.app` continua respondendo: é o alias padrão da
+plataforma e aponta para o mesmo deployment. Isso não é problema — o que
+importa é que **nenhuma URL gerada pela aplicação** o utiliza. Confirmado:
+canonical, `og:url`, `og:image`, `twitter:image`, `sitemap.xml`, `robots.txt`,
+o link de compartilhamento por WhatsApp e o QR Code usam todos o domínio
+definitivo.
 
 ---
 
@@ -407,9 +439,31 @@ que o primeiro evento chega **já sanitizado**.
 Vercel Web Analytics — gratuito no Hobby (50 mil eventos/mês), sem cookie,
 sem credencial. O script é servido pela própria origem.
 
-Passo manual (uma vez, gratuito): painel da Vercel -> projeto `antero-cartas`
--> **Analytics** -> **Enable**. Sem esse toggle, o `<Analytics />` já está no
-`layout.tsx` mas a plataforma não coleta.
+**Ativado em 2026-07-29** no painel (projeto -> Analytics -> Enable) e
+validado ao vivo: os beacons de pageview chegam e a máscara de URL privada
+funciona — ver abaixo.
+
+Passo manual (uma vez, gratuito, caso precise repetir em outro projeto):
+painel da Vercel -> projeto `antero-cartas` -> **Analytics** -> **Enable**.
+Sem esse toggle, o `<Analytics />` já está no `layout.tsx` mas a plataforma
+não coleta.
+
+### Validação da máscara de URL (2026-07-29)
+
+Navegando por `/`, `/criar` e `/c/seed-demonstracao` em produção, os três
+beacons enviados foram:
+
+    {"o":"https://cartas.anterosistemas.com.br/",           ...}
+    {"o":"https://cartas.anterosistemas.com.br/criar",      ...}
+    {"o":"https://cartas.anterosistemas.com.br/c/[slug]",   ...}
+
+O slug real (`seed-demonstracao`) **não aparece em nenhum beacon** — é
+substituído por `[slug]` antes do envio, exatamente como projetado em D55.
+
+**Atenção ao testar:** o script do Web Analytics ignora navegador
+automatizado (`navigator.webdriver` ou `Headless` no user agent) e não envia
+beacon nenhum. Para reproduzir esta verificação é preciso mascarar as duas
+coisas — do contrário parece, enganosamente, que o analytics não funciona.
 
 **Limitação do plano gratuito:** eventos personalizados exigem plano Pro. No
 Hobby só o **pageview** é coletado. Os cerca de 25 `track()` do produto

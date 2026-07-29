@@ -7,9 +7,11 @@
 
 ## 1. Resumo
 
-O trabalho **técnico** da Fase 2.5 está concluído. O que resta são quatro
-ações que dependem de você (DNS, DSN do Sentry, autorização para apagar dados
-de teste, testes em celular) — nenhuma delas bloqueada por código.
+O trabalho **técnico** da Fase 2.5 está concluído, **incluindo o domínio
+definitivo**, que entrou no ar em 2026-07-29 com certificado válido.
+
+Restam três ações que dependem de você (DSN do Sentry, autorização para apagar
+os dados de teste, testes em celular) — nenhuma delas bloqueada por código.
 
 A Fase 3 **não** foi iniciada: não existe pagamento real, webhook nem e-mail
 real. Nenhum serviço pago foi contratado, nenhum projeto Supabase novo foi
@@ -22,8 +24,8 @@ criado e o projeto `antero-atendimentos` não foi tocado.
 | Branch | `master` (única do repositório), rastreando `origin/master` |
 | Working tree | limpo |
 | Git vs. remoto | sincronizados, mesmo commit |
-| URL pública atual | `https://antero-cartas.vercel.app` (**temporária**) |
-| Domínio definitivo | `cartas.anterosistemas.com.br` — na Vercel, aguardando DNS |
+| URL pública | **`https://cartas.anterosistemas.com.br`** (definitiva, no ar) |
+| Certificado | Let's Encrypt, válido até 2026-10-27 |
 | Deploy | Production, `Ready` |
 | Testes | **211/211 passando** com banco local (`RUN_DB_TESTS=true`) |
 | Fase 3 | não iniciada |
@@ -56,35 +58,48 @@ deployment and pending work`.
 
 | Uso | URL |
 |---|---|
-| Produção (atual) | `https://antero-cartas.vercel.app` |
-| Produção (definitiva, pendente de DNS) | `https://cartas.anterosistemas.com.br` |
+| Produção (definitiva) | `https://cartas.anterosistemas.com.br` |
+| Alias da plataforma | `https://antero-cartas.vercel.app` (mesmo deployment) |
 | Sitemap | `/sitemap.xml` |
 | Robots | `/robots.txt` |
 | Imagem Open Graph | `/opengraph-image` (PNG 1200x630) |
 | Repositório | `github.com/DavidEdsonDoNascimento/antero-cartas` |
 
-Confirmado no smoke test: **nenhuma URL de produção contém `localhost`,
-placeholder ou string vazia.** O `sitemap.xml` publicado usa o domínio da
-Vercel — passará ao domínio definitivo automaticamente no deploy seguinte à
-troca de `NEXT_PUBLIC_SITE_URL`, porque tudo deriva dessa variável.
+Confirmado: **nenhuma URL gerada pela aplicação contém `localhost`,
+placeholder, string vazia ou `.vercel.app`.** Canonical, `og:url`, `og:image`,
+`twitter:image`, `sitemap.xml`, `robots.txt`, o link de compartilhamento por
+WhatsApp e o QR Code usam todos o domínio definitivo.
+
+O alias `antero-cartas.vercel.app` continua respondendo — é o padrão da
+plataforma e aponta para o mesmo deployment. Não é problema: o que importa é
+que a aplicação não o gera.
 
 ## 4. Domínio
 
-`cartas.anterosistemas.com.br` foi **adicionado ao projeto `antero-cartas`**
-na Vercel nesta sessão. A propriedade do domínio já está verificada — o apex
-`anterosistemas.com.br` está na mesma conta Vercel desde 2026-04-29.
+**Concluído em 2026-07-29.** `https://cartas.anterosistemas.com.br` é a URL
+pública definitiva.
 
-Descoberta relevante: o DNS do domínio **não** está na Vercel. Os nameservers
-apontam para a **Cloudflare** (`mustafa.ns.cloudflare.com`,
-`sarah.ns.cloudflare.com`), então os registros que `vercel dns ls` lista para
-esse domínio não são autoritativos. O apex e o `www` pertencem a outro projeto
-(`dnsistemas`); criar `cartas.` não conflita com eles.
+Sequência executada:
 
-Registro exato a criar, e passo a passo do que fazer depois: seção 8 de
-`docs/0006_Runbook_Producao.md`.
+1. Subdomínio adicionado ao projeto `antero-cartas` na Vercel.
+2. Registro `CNAME cartas -> 0d681018f5545bb0.vercel-dns-017.com` criado na
+   **Cloudflare** por você, com proxy desligado (DNS only).
+3. DNS validado: `vercel domains verify` retorna `configured-correctly` /
+   `configuredBy: CNAME`; resolvedores públicos (Google e Cloudflare) devolvem
+   os IPs da Vercel (`64.29.17.65`, `216.198.79.65`) — confirmando que o proxy
+   está mesmo desligado.
+4. Certificado emitido pela Let's Encrypt (CN `cartas.anterosistemas.com.br`,
+   cadeia confiável, válido até 2026-10-27). A emissão levou alguns minutos: o
+   handshake TLS falhou nas primeiras tentativas e depois estabilizou em
+   **20/20 requisições bem-sucedidas** em duas stacks TLS distintas (schannel
+   do curl e a do Node).
+5. `NEXT_PUBLIC_SITE_URL` trocada em Production às 19:15:26 UTC.
+6. Novo deployment de produção criado às **19:15:43 UTC** — posterior à troca
+   da variável, como exigido (a URL é lida em build time).
 
-**Não alterei o DNS** — é ação sua, e é irreversível o suficiente para exigir
-sua mão.
+Ponto de atenção registrado para o futuro: o DNS de `anterosistemas.com.br`
+está na **Cloudflare**, não na Vercel. Os registros que `vercel dns ls` lista
+para esse domínio não são autoritativos.
 
 ## 5. Supabase
 
@@ -149,8 +164,19 @@ sanitizado**.
 Vercel Web Analytics: gratuito no Hobby, **sem cookie**, sem credencial,
 script servido pela própria origem (não abre domínio na CSP).
 
-Falta **um clique gratuito** no painel (projeto -> Analytics -> Enable) para a
-plataforma começar a coletar. O `<Analytics />` já está no `layout.tsx`.
+**Ativado no painel em 2026-07-29 e validado ao vivo em produção.** Navegando
+por `/`, `/criar` e `/c/seed-demonstracao`, os três beacons enviados foram:
+
+    {"o":"https://cartas.anterosistemas.com.br/",         ...}
+    {"o":"https://cartas.anterosistemas.com.br/criar",    ...}
+    {"o":"https://cartas.anterosistemas.com.br/c/[slug]", ...}
+
+O slug real **não aparece em nenhum beacon** — a máscara de D55 funciona de
+fato, não só em teste unitário.
+
+Armadilha registrada: o script do Web Analytics ignora navegador automatizado
+(`navigator.webdriver` ou `Headless` no user agent) e não envia beacon algum.
+Sem mascarar as duas coisas, parece enganosamente que o analytics não funciona.
 
 **Limitação:** eventos personalizados exigem plano Pro; no Hobby só o pageview
 é coletado. O adapter para os cerca de 25 `track()` do produto está pronto
@@ -199,10 +225,25 @@ com `RUN_DB_TESTS=true`.
   carrega; e o **controle negativo confirma que a política é aplicada de
   fato** — `fetch` e `iframe` para origem não listada são bloqueados enquanto
   `/api/carts` continua permitido.
-- **Smoke test de produção (somente leitura): 31/31.** HTTPS, canonical,
-  `og:image`, sitemap sem rota privada, robots, os seis headers,
-  `mock-confirm` -> 403, `/api/dev/emails` -> 404, resposta de pedido sem
-  token nem e-mail, e nenhum segredo nos bundles do cliente.
+- **Smoke test de produção (somente leitura): 31/31**, executado tanto contra
+  `antero-cartas.vercel.app` quanto, depois da troca, contra
+  `cartas.anterosistemas.com.br`. Cobre HTTPS, canonical, `og:image`, sitemap
+  sem rota privada, robots, os seis headers, `mock-confirm` -> 403,
+  `/api/dev/emails` -> 404, resposta de pedido sem token nem e-mail, e nenhum
+  segredo nos bundles do cliente.
+- **Validação do domínio definitivo: 29/31** — as duas "falhas" foram do meu
+  próprio teste, que procurava o botão de compartilhar no HTML do servidor; ele
+  só é renderizado depois de abrir o envelope, no cliente. Verificado em
+  navegador: o link sai como
+  `https://cartas.anterosistemas.com.br/c/seed-demonstracao`, sem token.
+- **QR Code decodificado** (não apenas gerado): contém exatamente
+  `https://cartas.anterosistemas.com.br/c/seed-demonstracao` — sem
+  `.vercel.app`, sem `localhost`, sem token, sem barra duplicada.
+  Reproduzível com `scripts/checkQrDomain.ts`.
+- **Certificado TLS** inspecionado: CN `cartas.anterosistemas.com.br`, emissor
+  Let's Encrypt, cadeia confiável, válido até 2026-10-27.
+- **Carta pública** aberta em navegador contra o domínio definitivo, sem
+  nenhuma violação de CSP.
 - **Logs da Vercel** durante o smoke test: só `info`, nenhum erro.
 - **Dry run** da limpeza de dados de teste (leitura apenas) — resultado
   idêntico ao documentado.
@@ -252,11 +293,12 @@ leva anterior aguarda autorização.
 
 | # | O que | Por que preciso de você |
 |---|---|---|
-| 1 | Criar o CNAME `cartas` na Cloudflare | acesso ao DNS |
-| 2 | Habilitar Web Analytics no painel da Vercel | um clique, gratuito |
-| 3 | Criar conta no Sentry e fornecer o DSN | credencial externa |
-| 4 | Autorizar a remoção dos dados de teste | alteração destrutiva em produção |
-| 5 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
+| 1 | Criar conta no Sentry e fornecer o DSN | credencial externa |
+| 2 | Autorizar a remoção dos dados de teste | alteração destrutiva em produção |
+| 3 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
+
+Concluídos por você em 2026-07-29: CNAME na Cloudflare e ativação do Web
+Analytics. Ambos validados por mim logo em seguida.
 
 ## 14. Limitações e riscos conhecidos
 
@@ -295,16 +337,6 @@ Nenhuma rota temporária, backdoor ou mecanismo público de publicação foi
 criado. Nenhuma rota que gere erro de propósito foi criada.
 
 ## 16. Como retomar
-
-### Se você já criou o DNS
-
-    Leia docs/0008_Handoff_Fase2_5_Final.md, seção 4, e a seção 8 de
-    docs/0006_Runbook_Producao.md. O DNS de cartas.anterosistemas.com.br já
-    foi configurado na Cloudflare. Valide a propagação e o HTTPS, troque
-    NEXT_PUBLIC_SITE_URL em Production para o domínio definitivo, faça novo
-    deploy e revalide canonical, sitemap, metadata, compartilhamento, link
-    público e QR Code. Confirme que nenhuma URL pública usa localhost nem
-    antero-cartas.vercel.app. Não inicie a Fase 3.
 
 ### Se você quer apagar os dados de teste
 
