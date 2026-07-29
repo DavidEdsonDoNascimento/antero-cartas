@@ -73,3 +73,16 @@ export const createOrderSchema = z.object({
 });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+
+/**
+ * Corpo do pagamento de cartão: só o token gerado pelo Payment Brick no
+ * navegador chega aqui — nunca número, validade ou CVV (task 013, seção 8).
+ */
+export const cardPaymentSchema = z.object({
+  token: z.string().min(1).max(200),
+  installments: z.number().int().min(1).max(24),
+  paymentMethodId: z.string().min(1).max(50),
+  issuerId: z.string().max(50).optional(),
+});
+
+export type CardPaymentInput = z.infer<typeof cardPaymentSchema>;
