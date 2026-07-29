@@ -1,5 +1,52 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Fase 2.5] — Limpeza autorizada dos dados de teste em produção — 2026-07-29
+
+### Removido (com autorização explícita, por ID)
+- Cart `cmrzbpfxa000004l211cblj62` (`DRAFT`, sem slug)
+- Cart `cmrzbpt5c000104l2f1nt0n1f` (`AWAITING_PAYMENT`, sem slug)
+- Order `cmrzbq6fp000204l2vjhtgvzv` (`PENDING`, e-mail `@seed.local`, nunca
+  confirmado)
+
+Criados no diagnóstico da Etapa 4 em 2026-07-24. Removidos com
+`scripts/cleanupTestData.ts`, que só aceita lista explícita de IDs — nenhum
+filtro genérico por data, provider ou domínio de e-mail.
+
+### Verificação
+Fotografia do banco antes e depois, comparando totais e listando todas as
+entidades:
+
+| | Antes | Depois | Delta |
+|---|---|---|---|
+| Cart | 23 | 21 | −2 (só os autorizados) |
+| Order | 10 | 9 | −1 (só o autorizado) |
+| CartMedia | 21 | 21 | 0 |
+| EmailDelivery | 5 | 5 | 0 |
+
+Antes de remover foi confirmado que os dois carts tinham **0 mídia e 0
+EmailDelivery** (logo, nenhum objeto de Storage a apagar) e que **exatamente
+um** Order casava com os carts autorizados — o autorizado. Depois, os três IDs
+não aparecem mais em nenhuma listagem, e os 9 Orders restantes são todos
+anteriores e intactos.
+
+### Observação: o guard D49 funcionou
+A primeira tentativa de remoção **abortou** com
+`APP_ENV=production com NODE_ENV != "production"` em `getStorage()`, antes de
+qualquer `delete`. Nada foi removido nessa tentativa (confirmado pelos totais
+inalterados). O script chama `getStorage()` incondicionalmente, mesmo quando
+não há mídia. A remoção foi refeita com `NODE_ENV=production` explícito, que é
+o caminho que a própria mensagem do guard indica para operação administrativa
+intencional.
+
+### Não removido (fora da autorização)
+O banco de produção ainda tem outros registros com aparência de teste — vários
+`Cart` em `DRAFT` sem slug e o par
+`cmrzae1sv000104jmifvnoem5` / Order `cmrzaj9et000604jm5tjy5mwc` (`PENDING`).
+**Nenhum deles foi tocado:** a autorização cobria só os três IDs acima.
+Qualquer limpeza adicional precisa de nova autorização explícita, com o mesmo
+procedimento de dry run e conferência de totais.
+
+
 ## [Fase 2.5] — Domínio definitivo no ar e analytics ativo — 2026-07-29
 
 `https://cartas.anterosistemas.com.br` passou a ser a URL pública definitiva.

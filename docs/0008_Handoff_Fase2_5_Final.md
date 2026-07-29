@@ -10,8 +10,10 @@
 O trabalho **técnico** da Fase 2.5 está concluído, **incluindo o domínio
 definitivo**, que entrou no ar em 2026-07-29 com certificado válido.
 
-Restam três ações que dependem de você (DSN do Sentry, autorização para apagar
-os dados de teste, testes em celular) — nenhuma delas bloqueada por código.
+Os dados de teste em produção foram removidos com sua autorização (seção 12).
+
+Restam duas ações que dependem de você (colar o DSN do Sentry no prompt e
+rodar o checklist em aparelho físico) — nenhuma bloqueada por código.
 
 A Fase 3 **não** foi iniciada: não existe pagamento real, webhook nem e-mail
 real. Nenhum serviço pago foi contratado, nenhum projeto Supabase novo foi
@@ -262,43 +264,60 @@ seção 13 de `docs/0006_Runbook_Producao.md`, com campos em branco.
 parcial que estavam como PENDENTE continuam pendentes — eles dependem de
 navegador e aparelho reais.
 
-## 12. Dados de teste remotos
+## 12. Dados de teste remotos — REMOVIDOS
 
-Nada foi removido. Dry run repetido nesta sessão, saída **idêntica** à
-registrada em 2026-07-24:
+Removidos em 2026-07-29, com sua autorização explícita e por ID:
 
-| ID | Tipo | Status | Mídia | Pedidos | E-mails |
-|---|---|---|---|---|---|
-| `cmrzbpfxa000004l211cblj62` | Cart | `DRAFT`, sem slug | 0 | 0 | 0 |
-| `cmrzbpt5c000104l2f1nt0n1f` | Cart | `AWAITING_PAYMENT`, sem slug | 0 | 1 | 0 |
+| ID | Tipo | Status |
+|---|---|---|
+| `cmrzbpfxa000004l211cblj62` | Cart | `DRAFT`, sem slug |
+| `cmrzbpt5c000104l2f1nt0n1f` | Cart | `AWAITING_PAYMENT`, sem slug |
+| `cmrzbq6fp000204l2vjhtgvzv` | Order | `PENDING`, e-mail `@seed.local` |
 
-O pedido relacionado é `cmrzbq6fp000204l2vjhtgvzv` (`PENDING`, e-mail
-`diagnostico.etapa4@seed.local`, nunca confirmado). **0 mídia e 0 e-mail nos
-dois** — não há nenhum objeto de Storage a apagar.
+Antes de remover: dry run repetido, confirmando **0 mídia e 0 EmailDelivery**
+nos dois carts (logo, nenhum objeto de Storage) e **exatamente um** Order
+casando com eles — o autorizado.
 
-Comando de remoção, **a executar somente com sua autorização explícita**:
+Totais do banco antes e depois:
 
-    npx tsx scripts/cleanupTestData.ts \
-      --env-file .env.production.reference \
-      --cart-ids cmrzbpt5c000104l2f1nt0n1f,cmrzbpfxa000004l211cblj62 \
-      --confirm
+| | Antes | Depois | Delta |
+|---|---|---|---|
+| Cart | 23 | 21 | −2 |
+| Order | 10 | 9 | −1 |
+| CartMedia | 21 | 21 | 0 |
+| EmailDelivery | 5 | 5 | 0 |
 
-Observação: nesta sessão **não criei novos registros em produção**. Os passos
-que escrevem no banco (criar rascunho, atualizar, subir foto, criar pedido) já
-tinham sido executados em 2026-07-24 e produziram exatamente os IDs acima;
-repeti-los geraria uma nova leva de órfãos justamente enquanto a remoção da
-leva anterior aguarda autorização.
+Os três IDs não aparecem mais em nenhuma listagem; os 9 Orders restantes são
+anteriores e intactos.
+
+A primeira tentativa **abortou** pelo guard D49
+(`APP_ENV=production com NODE_ENV != "production"`) em `getStorage()`, antes de
+qualquer `delete` — nada foi removido nessa tentativa. Refeita com
+`NODE_ENV=production` explícito, que é o caminho indicado pela própria mensagem
+do guard para operação administrativa intencional.
+
+### Ainda existem outros registros de aparência de teste
+
+O banco de produção tem vários `Cart` em `DRAFT` sem slug e o par
+`cmrzae1sv000104jmifvnoem5` / Order `cmrzaj9et000604jm5tjy5mwc` (`PENDING`).
+**Nenhum foi tocado** — a autorização cobria só os três IDs acima. Qualquer
+limpeza adicional precisa de nova autorização, com o mesmo procedimento: dry
+run, conferência de mídia/e-mail/Storage e comparação de totais antes e depois.
+
+Nesta fase **não criei novos registros em produção**: os passos que escrevem no
+banco já tinham sido executados em 2026-07-24 e produziram exatamente os IDs
+acima.
 
 ## 13. Pendências externas (dependem de você)
 
 | # | O que | Por que preciso de você |
 |---|---|---|
-| 1 | Criar conta no Sentry e fornecer o DSN | credencial externa |
-| 2 | Autorizar a remoção dos dados de teste | alteração destrutiva em produção |
-| 3 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
+| 1 | Colar o DSN no prompt de `vercel env add` | credencial externa |
+| 2 | Rodar o checklist em Android/iPhone e rede móvel | aparelho físico |
 
-Concluídos por você em 2026-07-29: CNAME na Cloudflare e ativação do Web
-Analytics. Ambos validados por mim logo em seguida.
+Concluídos por você em 2026-07-29: CNAME na Cloudflare, ativação do Web
+Analytics e autorização da limpeza dos dados de teste. Todos validados por mim
+logo em seguida.
 
 ## 14. Limitações e riscos conhecidos
 
@@ -337,12 +356,6 @@ Nenhuma rota temporária, backdoor ou mecanismo público de publicação foi
 criado. Nenhuma rota que gere erro de propósito foi criada.
 
 ## 16. Como retomar
-
-### Se você quer apagar os dados de teste
-
-    Leia docs/0008_Handoff_Fase2_5_Final.md, seção 12. Repita o dry run,
-    confirme que a saída é exatamente a documentada e só então execute a
-    remoção com --confirm. Registre o resultado no changelog.
 
 ### Se você tem o DSN do Sentry
 
