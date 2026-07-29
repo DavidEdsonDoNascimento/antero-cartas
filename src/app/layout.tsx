@@ -38,12 +38,24 @@ export const metadata: Metadata = {
     "carta para mãe",
     "carta para pai",
   ],
+  // Canonical relativo: resolvido contra `metadataBase`, então acompanha
+  // automaticamente o domínio de NEXT_PUBLIC_SITE_URL (task 011, seção 8.3).
+  // Cada rota que precisar de canonical próprio sobrescreve em seu metadata.
+  alternates: { canonical: "/" },
   openGraph: {
     title: `${site.name} — ${site.tagline}`,
     description: site.description,
     type: "website",
     locale: "pt_BR",
     siteName: site.name,
+    url: site.url,
+  },
+  // A imagem vem de `opengraph-image.tsx` / `twitter-image.tsx`; aqui só o
+  // formato do card (imagem grande) para o preview do X e do WhatsApp.
+  twitter: {
+    card: "summary_large_image",
+    title: `${site.name} — ${site.tagline}`,
+    description: site.description,
   },
 };
 
