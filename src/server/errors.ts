@@ -10,6 +10,7 @@ export type ApiErrorCode =
   | "forbidden_state"
   | "limit_reached"
   | "mock_disabled"
+  | "rate_limited"
   | "server";
 
 const STATUS: Record<ApiErrorCode, number> = {
@@ -20,6 +21,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   forbidden_state: 409,
   limit_reached: 409,
   mock_disabled: 403,
+  rate_limited: 429,
   server: 500,
 };
 

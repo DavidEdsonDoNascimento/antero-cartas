@@ -1,5 +1,5 @@
 import { validateSearchTerm } from "@/lib/music";
-import { createInMemoryRateLimiter } from "@/lib/rateLimit";
+import { createInMemoryRateLimiter, clientKey } from "@/lib/rateLimit";
 import { searchMusic, SearchError, type SearchErrorCode } from "@/server/youtubeSearch";
 
 export const dynamic = "force-dynamic";
@@ -34,11 +34,6 @@ const PUBLIC_MESSAGES: Record<SearchErrorCode, string> = {
   timeout: "A busca demorou demais. Tente novamente.",
   upstream_error: "Não foi possível buscar agora. Tente novamente ou cole o link do YouTube.",
 };
-
-function clientKey(req: Request): string {
-  const fwd = req.headers.get("x-forwarded-for");
-  return fwd?.split(",")[0]?.trim() || "local";
-}
 
 export async function GET(req: Request): Promise<Response> {
   const gate = limiter.check(clientKey(req));

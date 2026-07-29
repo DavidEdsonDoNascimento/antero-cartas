@@ -12,6 +12,12 @@ export interface RateLimiter {
   check(key: string): { allowed: boolean; retryAfterMs: number };
 }
 
+/** Chave por IP (best-effort — ver limitação de instância única acima). */
+export function clientKey(req: Request): string {
+  const fwd = req.headers.get("x-forwarded-for");
+  return fwd?.split(",")[0]?.trim() || "local";
+}
+
 export function createInMemoryRateLimiter(
   limit: number,
   windowMs: number,
