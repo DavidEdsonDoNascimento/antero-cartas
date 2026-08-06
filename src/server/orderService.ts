@@ -462,21 +462,61 @@ export async function applyMercadoPagoWebhook(
     ? await prisma.order.findUnique({ where: { id: input.externalReference } })
     : null;
 
-  try {
-    await prisma.paymentEvent.create({
-      data: {
-        orderId: order?.id ?? null,
-        provider: input.provider,
-        providerEventId: input.providerEventId,
-        type: input.type,
-        providerPaymentId: input.providerPaymentId,
-        rawStatus: input.status,
-      },
-    });
-  } catch {
-    return { kind: "duplicate" };
+  const eventKey = { provider: input.provider, providerEventId: input.providerEventId };
+
+  // Reserva do evento. A dedup acontece em duas etapas de propósito: a linha
+  // marca "esta notificação chegou", e `processedAt` marca "e foi aplicada".
+  // Um evento reservado sem `processedAt` é resto de um processo que morreu no
+  // meio (timeout de função serverless, queda de conexão) — o reenvio do
+  // Mercado Pago precisa poder terminar o serviço. Tratar a mera existência da
+  // linha como duplicado deixaria o pagamento confirmado no provedor e a carta
+  // nunca publicada, sem chance de retry.
+  const existing = await prisma.paymentEvent.findUnique({
+    where: { provider_providerEventId: eventKey },
+  });
+  if (existing?.processedAt) return { kind: "duplicate" };
+
+  if (!existing) {
+    try {
+      await prisma.paymentEvent.create({
+        data: {
+          ...eventKey,
+          orderId: order?.id ?? null,
+          type: input.type,
+          providerPaymentId: input.providerPaymentId,
+          rawStatus: input.status,
+        },
+      });
+    } catch {
+      // Outra entrega da mesma notificação venceu a corrida e está aplicando
+      // agora: sair sem tocar em nada é o comportamento seguro.
+      return { kind: "duplicate" };
+    }
   }
 
+  const outcome = await resolveWebhookOutcome(order, input);
+
+  // Só aqui o evento vira definitivamente concluído. Qualquer exceção acima
+  // deixa `processedAt` nulo e mantém o reenvio processável.
+  await prisma.paymentEvent.update({
+    where: { provider_providerEventId: eventKey },
+    data: { processedAt: new Date(), orderId: order?.id ?? null },
+  });
+
+  return outcome;
+}
+
+type WebhookOrder = NonNullable<Awaited<ReturnType<typeof prisma.order.findUnique>>>;
+
+/**
+ * Decide e aplica o efeito de uma notificação já reservada. Separada de
+ * `applyMercadoPagoWebhook` para que a marcação de "evento concluído" fique
+ * num único ponto, depois de todo efeito colateral ter dado certo.
+ */
+async function resolveWebhookOutcome(
+  order: WebhookOrder | null,
+  input: MercadoPagoWebhookInput,
+): Promise<WebhookOutcome> {
   if (!order) return { kind: "unknown_order" };
 
   if (order.providerPaymentId && order.providerPaymentId !== input.providerPaymentId) {

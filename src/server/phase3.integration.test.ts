@@ -510,6 +510,185 @@ describe.skipIf(!RUN)(
 );
 
 describe.skipIf(!RUN)(
+  "Fase 3 — reprocessamento de webhook interrompido no meio",
+  { timeout: DB_TIMEOUT },
+  () => {
+    let prisma: typeof import("@/lib/db").prisma;
+    const cartIdsToClean: string[] = [];
+
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(() => {
+      vi.doUnmock("@/server/payment/mercadoPagoStatus");
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      for (const cartId of cartIdsToClean) {
+        const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
+        await prisma.paymentEvent.deleteMany({ where: { orderId: { in: orders.map((o) => o.id) } } });
+        await prisma.order.deleteMany({ where: { cartId } });
+        await prisma.cart.deleteMany({ where: { id: cartId } });
+      }
+      await prisma.$disconnect();
+    }, DB_TIMEOUT);
+
+    async function createPendingOrder(
+      orderService: typeof import("@/server/orderService"),
+      cartService: typeof import("@/server/cartService"),
+      prismaClient: typeof import("@/lib/db").prisma,
+      providerPaymentId: string,
+      label: string,
+    ) {
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: label,
+        message: "Mensagem de teste de integração da Fase 3",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `${label}.${RUN_ID}@example.com`.replace(/\s+/g, ""),
+        acceptTerms: true,
+      });
+      await prismaClient.order.update({
+        where: { id: order.id },
+        data: { provider: "mercadopago", paymentMethod: "PIX", providerPaymentId },
+      });
+      return order;
+    }
+
+    /**
+     * Um processo que morre entre o registro do evento e a aplicação da
+     * transição (timeout de função serverless, queda de conexão) deixa o
+     * `PaymentEvent` gravado sem nada ter sido aplicado. O reenvio do Mercado
+     * Pago repete o mesmo id de notificação — se ele for descartado como
+     * duplicado, o pagamento fica confirmado no provedor e a carta nunca é
+     * publicada.
+     */
+    it("aplica a transição no reenvio de um evento que ficou pela metade", async () => {
+      const providerPaymentId = `mp_retry_${RUN_ID}`;
+      const providerEventId = `evt_retry_${RUN_ID}`;
+      let interrupt = true;
+
+      vi.doMock("@/server/payment/mercadoPagoStatus", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("@/server/payment/mercadoPagoStatus")>();
+        return {
+          ...actual,
+          shouldApplyTransition: (
+            current: Parameters<typeof actual.shouldApplyTransition>[0],
+            next: Parameters<typeof actual.shouldApplyTransition>[1],
+          ) => {
+            if (interrupt) {
+              interrupt = false;
+              throw new Error("processo interrompido antes de aplicar a transição");
+            }
+            return actual.shouldApplyTransition(current, next);
+          },
+        };
+      });
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      const orderService = await import("@/server/orderService");
+
+      const order = await createPendingOrder(
+        orderService,
+        cartService,
+        prisma,
+        providerPaymentId,
+        "reprocessa",
+      );
+
+      const notification = {
+        provider: "mercadopago",
+        providerEventId,
+        providerPaymentId,
+        externalReference: order.id,
+        status: "approved",
+        statusDetail: "accredited",
+        type: "payment",
+      };
+
+      // Primeira entrega: morre no meio. A rota responderia 500 e o Mercado
+      // Pago reenviaria a mesma notificação.
+      await expect(orderService.applyMercadoPagoWebhook(notification)).rejects.toThrow(
+        /processo interrompido/,
+      );
+
+      const midOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(midOrder.status).toBe("PENDING"); // nada foi aplicado
+      const midCart = await prisma.cart.findUniqueOrThrow({ where: { id: order.cartId } });
+      expect(midCart.status).not.toBe("PUBLISHED");
+      // ... mas o evento já está registrado.
+      const recorded = await prisma.paymentEvent.findUniqueOrThrow({
+        where: { provider_providerEventId: { provider: "mercadopago", providerEventId } },
+      });
+      expect(recorded.providerPaymentId).toBe(providerPaymentId);
+
+      // Reenvio da MESMA notificação: precisa ser aplicado, não descartado.
+      const retry = await orderService.applyMercadoPagoWebhook(notification);
+      expect(retry).toEqual({ kind: "applied", internalStatus: "PAID" });
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(finalOrder.status).toBe("PAID");
+      const finalCart = await prisma.cart.findUniqueOrThrow({ where: { id: order.cartId } });
+      expect(finalCart.status).toBe("PUBLISHED");
+      expect(finalCart.slug).toBeTruthy();
+
+      const deliveries = await prisma.emailDelivery.findMany({ where: { orderId: order.id } });
+      expect(deliveries).toHaveLength(1);
+    });
+
+    /** A idempotência de verdade não pode ser afrouxada pela correção acima. */
+    it("mantém como duplicado o reenvio de um evento que foi concluído", async () => {
+      const providerPaymentId = `mp_done_${RUN_ID}`;
+      const providerEventId = `evt_done_${RUN_ID}`;
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      const orderService = await import("@/server/orderService");
+
+      const order = await createPendingOrder(
+        orderService,
+        cartService,
+        prisma,
+        providerPaymentId,
+        "concluido",
+      );
+
+      const notification = {
+        provider: "mercadopago",
+        providerEventId,
+        providerPaymentId,
+        externalReference: order.id,
+        status: "approved",
+        statusDetail: "accredited",
+        type: "payment",
+      };
+
+      const first = await orderService.applyMercadoPagoWebhook(notification);
+      expect(first).toEqual({ kind: "applied", internalStatus: "PAID" });
+      const slug = (await prisma.cart.findUniqueOrThrow({ where: { id: order.cartId } })).slug;
+
+      const second = await orderService.applyMercadoPagoWebhook(notification);
+      expect(second).toEqual({ kind: "duplicate" });
+
+      const cartRow = await prisma.cart.findUniqueOrThrow({ where: { id: order.cartId } });
+      expect(cartRow.slug).toBe(slug); // não republicou
+      const deliveries = await prisma.emailDelivery.findMany({ where: { orderId: order.id } });
+      expect(deliveries).toHaveLength(1); // não reenviou e-mail
+    });
+  },
+);
+
+describe.skipIf(!RUN)(
   "Fase 3 — falha de e-mail não desfaz a publicação (task 013, seção 17)",
   { timeout: DB_TIMEOUT },
   () => {

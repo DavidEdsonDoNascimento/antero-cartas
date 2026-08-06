@@ -156,6 +156,12 @@ model PaymentEvent {
   type              String
   providerPaymentId String?
   rawStatus         String?
+  /// Momento em que a notificação terminou de ser aplicada. Nulo significa
+  /// "reservada, mas não concluída" — o processo morreu entre o registro e a
+  /// aplicação da transição, e o reenvio do provedor pode (e deve) ser
+  /// processado de novo. Sem esta coluna, o `@@unique` sozinho descartaria
+  /// esse reenvio como duplicado e o pagamento nunca seria aplicado.
+  processedAt       DateTime?
   createdAt         DateTime @default(now())
 
   @@unique([provider, providerEventId])
