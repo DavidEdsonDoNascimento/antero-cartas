@@ -9,7 +9,7 @@
 
 | Ambiente | Onde roda | Banco | Storage | Como sobe |
 |---|---|---|---|---|
-| **Local (dev)** | sua máquina | Supabase local (Docker, `npx supabase start`) | Supabase Storage local | `npm run dev` |
+| **Local (dev)** | sua máquina | Supabase local (Docker, `pnpm exec supabase start`) | Supabase Storage local | `pnpm dev` |
 | **Produção** | Vercel | Projeto remoto `antero-cartas` (Supabase hospedado) | Bucket `cart-media` do mesmo projeto | deploy da Vercel a partir do branch de produção |
 | **Preview** | Vercel (PRs/branches) | **nenhum** — sem credenciais de banco/storage de produção | — | deploy automático da Vercel |
 
@@ -23,30 +23,32 @@ páginas estáticas), mas **nunca escreve em produção** — ver seção 3 abai
 
 ### Pré-requisitos
 - Docker Desktop instalado e **em execução** (`docker info` deve responder).
-- Node/npm já usados pelo projeto.
+- Node e **pnpm** — gerenciador oficial do projeto, versão fixada em
+  `packageManager` no `package.json`. Não use npm nem yarn: um segundo
+  lockfile quebra a reprodutibilidade e a detecção da Vercel.
 
 ### Comandos
 ```bash
-npm install                 # se necessário
-npx supabase start          # sobe Postgres + Storage + Studio locais (Docker)
-npx supabase status         # confere URLs/portas
-npm run db:migrate          # aplica as migrations do Prisma no banco local
-npm run storage:setup       # cria o bucket cart-media local (idempotente)
-npm run db:seed             # dados fictícios (opcional)
-npm run dev                 # http://localhost:3000
+pnpm install                 # se necessário
+pnpm exec supabase start          # sobe Postgres + Storage + Studio locais (Docker)
+pnpm exec supabase status         # confere URLs/portas
+pnpm db:migrate          # aplica as migrations do Prisma no banco local
+pnpm storage:setup       # cria o bucket cart-media local (idempotente)
+pnpm db:seed             # dados fictícios (opcional)
+pnpm dev                 # http://localhost:3000
 ```
 
 Para recriar o banco local do zero:
 ```bash
-npm run supabase:reset      # supabase db reset — apaga e recria o Postgres local
-npm run db:migrate          # reaplica as migrations do Prisma
-npm run storage:setup       # recria o bucket (reset também limpa o storage)
-npm run db:seed             # opcional
+pnpm supabase:reset      # supabase db reset — apaga e recria o Postgres local
+pnpm db:migrate          # reaplica as migrations do Prisma
+pnpm storage:setup       # recria o bucket (reset também limpa o storage)
+pnpm db:seed             # opcional
 ```
 
 Para parar tudo:
 ```bash
-npm run supabase:stop
+pnpm supabase:stop
 ```
 
 ### Portas locais (padrão do Supabase CLI, ver `supabase/config.toml`)
@@ -60,8 +62,8 @@ Auth, Realtime, Edge Functions, pooler local, analytics interno do Supabase.
 
 ### Testes
 ```bash
-npm test                       # unitários, sem banco
-RUN_DB_TESTS=true npm test      # inclui os 7 testes de integração (usa o Postgres local)
+pnpm test                       # unitários, sem banco
+RUN_DB_TESTS=true pnpm test      # inclui os 7 testes de integração (usa o Postgres local)
 ```
 
 ### Problemas comuns
@@ -69,9 +71,9 @@ RUN_DB_TESTS=true npm test      # inclui os 7 testes de integração (usa o Post
   está rodando. Abra o Docker Desktop e espere o ícone ficar "Running" antes
   de tentar de novo.
 - **Porta em uso**: pare qualquer outro Postgres/serviço local nas portas
-  54321–54329, ou rode `npm run supabase:stop` antes de `start` de novo.
+  54321–54329, ou rode `pnpm supabase:stop` antes de `start` de novo.
 - **Bucket "não existe" depois de um `db reset`**: esperado — o reset apaga
-  os metadados do storage também. Rode `npm run storage:setup` de novo.
+  os metadados do storage também. Rode `pnpm storage:setup` de novo.
 
 ## 3. Separação de ambientes na Vercel
 
@@ -204,7 +206,7 @@ data/e-mail/provider, exatamente para não arriscar dado real no futuro).
 
 ```bash
 # 1. Revisar (dry run, sem alterar nada):
-npx tsx scripts/cleanupTestData.ts --env-file .env.production.reference \
+pnpm exec tsx scripts/cleanupTestData.ts --env-file .env.production.reference \
   --cart-ids cmrwk3u4h00008cunmkdvy0qr,cmrwk3uab00018cun46g2dmcj,cmrwk3ug600028cunlq46gvy8,cmrwk561w000010un3dzcrxf4,cmrwk7b5y000110unxe2ylpqu,cmrwkmuyg0000u4unhdztvfhx,cmrwkmuyr0001u4unqrdrbmx5,cmrwl9t1h0000cgun86x5g8bq,cmrwl9tdu0001cgun15gxhgnc,cmrxing0j0000ekunsfsvt8a0,cmrxing0z0001ekungawo26wm,cmrxm0fz2000ugounlxz409s1,cmrxm0ii7000vgoun4ts8w6tj,cmrxm0twk000wgounktroy9sm,cmrxm5tmn0012gounphzphvku,cmrxm5u660013gounkt7qylh3,cmryxoiok0000wwun3yap29fr
 
 # 2. Só depois de revisar e autorizar, repetir com --confirm.
@@ -249,7 +251,7 @@ tudo em volta dela:
    DATABASE_URL="<DATABASE_URL de .env.production.reference>" \
    DIRECT_URL="<DIRECT_URL de .env.production.reference>" \
    APP_ENV=production ALLOW_PRISMA_CLI_PRODUCTION=true \
-   npm run db:migrate:deploy
+   pnpm db:migrate:deploy
    ```
    ```powershell
    # PowerShell — equivalente
@@ -257,7 +259,7 @@ tudo em volta dela:
    $env:DIRECT_URL = "<DIRECT_URL de .env.production.reference>"
    $env:APP_ENV = "production"
    $env:ALLOW_PRISMA_CLI_PRODUCTION = "true"
-   npm run db:migrate:deploy
+   pnpm db:migrate:deploy
    ```
    As duas variáveis de confirmação (`APP_ENV`/`ALLOW_PRISMA_CLI_PRODUCTION`)
    são exigidas por `prisma.config.ts` (D49) — sem elas o comando recusa
@@ -270,7 +272,7 @@ tudo em volta dela:
 
 **Build Command da Vercel: o padrão da plataforma (`next build`), sem
 customização.** `prisma generate` roda sozinho via `postinstall` do
-`package.json` — dispara a cada `npm install` (inclusive o da Vercel antes do
+`package.json` — dispara a cada `pnpm install` (inclusive o da Vercel antes do
 build), sem precisar aparecer no Build Command. `prisma generate` é seguro e
 barato de rodar sempre: só lê `schema.prisma`, nunca toca o banco (por isso é
 o único comando do Prisma CLI isento do guard `APP_ENV`, ver D49).
@@ -351,8 +353,8 @@ Alternativa aceita pela Vercel, caso o CNAME não seja possível:
 
 1. Confirmar propagação e emissão do certificado:
 
-       npx vercel domains inspect cartas.anterosistemas.com.br
-       npx vercel domains verify cartas.anterosistemas.com.br
+       pnpm dlx vercel domains inspect cartas.anterosistemas.com.br
+       pnpm dlx vercel domains verify cartas.anterosistemas.com.br
 
 2. Conferir o HTTPS de fato:
 
@@ -360,12 +362,12 @@ Alternativa aceita pela Vercel, caso o CNAME não seja possível:
 
 3. Trocar a URL pública (Production apenas):
 
-       npx vercel env rm NEXT_PUBLIC_SITE_URL production
-       printf 'https://cartas.anterosistemas.com.br' | npx vercel env add NEXT_PUBLIC_SITE_URL production
+       pnpm dlx vercel env rm NEXT_PUBLIC_SITE_URL production
+       printf 'https://cartas.anterosistemas.com.br' | pnpm dlx vercel env add NEXT_PUBLIC_SITE_URL production
 
 4. Novo deploy — a URL é lida em build time:
 
-       npx vercel --prod
+       pnpm dlx vercel --prod
 
 5. Revalidar canonical, `og:image`, `sitemap.xml` (as três URLs devem usar o
    domínio novo), compartilhamento por WhatsApp e QR Code.
@@ -382,7 +384,7 @@ antigo em circulação.
 no banco:
 
     NEXT_PUBLIC_SITE_URL=https://cartas.anterosistemas.com.br APP_ENV=production \
-      npx tsx scripts/checkQrDomain.ts seed-demonstracao
+      pnpm exec tsx scripts/checkQrDomain.ts seed-demonstracao
 
 Validado em 2026-07-29 decodificando o PNG gerado: o QR Code contém
 exatamente `https://cartas.anterosistemas.com.br/c/seed-demonstracao` — sem
@@ -700,7 +702,7 @@ de teste para produção sem essa autorização — ver seção 16.
 - `src/server/email/render.ts`: template único, usado também pelo mock —
   nunca diverge entre o que se vê em dev (`/api/dev/emails`) e o que é
   enviado de verdade.
-- Reprocessamento de falha: `npx tsx scripts/reprocessFailedEmails.ts`
+- Reprocessamento de falha: `pnpm exec tsx scripts/reprocessFailedEmails.ts`
   (dry run por padrão; `--confirm` para reenviar de fato). Ver seção 12 da
   task 013 e D65.
 
@@ -729,7 +731,7 @@ Antes de trocar qualquer credencial de teste para produção:
 - [ ] Domínio de e-mail verificado no Resend (SPF/DKIM/DMARC)
 - [ ] E-mail de teste entregue com sucesso (não em spam)
 - [ ] Smoke test sandbox completo aprovado (seção 14, "Validar em sandbox")
-- [ ] `RUN_DB_TESTS=true npm test` passando
+- [ ] `RUN_DB_TESTS=true pnpm test` passando
 - [ ] Mocks continuam bloqueados (`ALLOW_MOCK_PAYMENT_CONFIRMATION` ausente
       em Production, `DEV_EMAILS_ENABLED=false`)
 - [ ] Sentry ativo e validado

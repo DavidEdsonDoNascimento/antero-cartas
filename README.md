@@ -20,8 +20,13 @@ PostgreSQL · Zod · Vitest.
 
 ## Como executar (primeira vez)
 
+O gerenciador oficial é o **pnpm** (versão fixada em `packageManager` no
+`package.json`; com Corepack, `corepack enable` já usa a certa). Não use npm
+nem yarn — um segundo lockfile quebra a reprodutibilidade e a detecção da
+Vercel.
+
 ```bash
-npm install
+pnpm install
 cp .env.example .env.local
 ```
 
@@ -31,10 +36,10 @@ abaixo. As demais variáveis já vêm com padrões que funcionam em desenvolvime
 (pagamento e e-mail em modo mock, busca de música em modo mock, storage em disco).
 
 ```bash
-npm run db:generate   # gera o cliente Prisma
-npm run db:migrate    # cria as tabelas no banco
-npm run db:seed       # (opcional) dados de exemplo
-npm run dev
+pnpm db:generate   # gera o cliente Prisma
+pnpm db:migrate    # cria as tabelas no banco
+pnpm db:seed       # (opcional) dados de exemplo
+pnpm dev
 ```
 Acesse http://localhost:3000.
 
@@ -47,7 +52,7 @@ Railway...):
 3. Se o provedor oferecer uma conexão **direta** (sem pooler/PgBouncer),
    coloque-a em `DIRECT_URL` — é a que as migrations usam. Se não houver
    pooler, repita o mesmo valor de `DATABASE_URL`.
-4. Rode `npm run db:migrate` para criar as tabelas.
+4. Rode `pnpm db:migrate` para criar as tabelas.
 
 > Use um banco **de desenvolvimento/teste**, nunca compartilhe credenciais de
 > produção neste arquivo.
@@ -65,7 +70,7 @@ serverless (disco efêmero) nem funciona com múltiplas instâncias:
    - a chave **`service_role`** → `SUPABASE_SERVICE_ROLE_KEY`
 2. Crie o bucket (idempotente, pode rodar de novo sem problema):
    ```bash
-   npm run storage:setup
+   pnpm storage:setup
    ```
 3. Ative o provider em `.env.local`:
    ```
@@ -82,18 +87,18 @@ a chave anônima lê apenas URLs que já conhece e não consegue enumerar as fot
 das cartinhas. Detalhes em `docs/0004_Decisions.md` (D39–D44).
 
 ## Scripts
-- `npm run dev` — ambiente de desenvolvimento
-- `npm run build` — build de produção
-- `npm run start` — sobe o build
-- `npm run lint` — ESLint
-- `npm run typecheck` — TypeScript (`tsc --noEmit`)
-- `npm test` — testes unitários (Vitest) · `npm run test:watch`
-- `npm run db:generate` — gera o cliente Prisma (`src/generated/prisma`)
-- `npm run db:migrate` — aplica migrations em desenvolvimento (`prisma migrate dev`)
-- `npm run db:push` — sincroniza o schema sem gerar migration (protótipos rápidos)
-- `npm run db:seed` — popula dados de exemplo (nenhum dado real)
-- `npm run db:studio` — abre o Prisma Studio para inspecionar o banco
-- `npm run storage:setup` — cria/corrige o bucket de fotos no Supabase Storage
+- `pnpm dev` — ambiente de desenvolvimento
+- `pnpm build` — build de produção
+- `pnpm start` — sobe o build
+- `pnpm lint` — ESLint
+- `pnpm typecheck` — TypeScript (`tsc --noEmit`)
+- `pnpm test` — testes unitários (Vitest) · `pnpm test:watch`
+- `pnpm db:generate` — gera o cliente Prisma (`src/generated/prisma`)
+- `pnpm db:migrate` — aplica migrations em desenvolvimento (`prisma migrate dev`)
+- `pnpm db:push` — sincroniza o schema sem gerar migration (protótipos rápidos)
+- `pnpm db:seed` — popula dados de exemplo (nenhum dado real)
+- `pnpm db:studio` — abre o Prisma Studio para inspecionar o banco
+- `pnpm storage:setup` — cria/corrige o bucket de fotos no Supabase Storage
 
 Em produção, use `db:generate` no build e uma migration explícita
 (`prisma migrate deploy`, não incluído nos scripts por não ser usado ainda
@@ -101,11 +106,11 @@ nesta fase) antes de subir uma nova versão.
 
 ## Testes
 
-- **Unitários** (`npm test`): rodam sempre, sem precisar de banco — cobrem
+- **Unitários** (`pnpm test`): rodam sempre, sem precisar de banco — cobrem
   música, token de edição, slug, expiração, validação de imagem, schemas etc.
 - **Integração** (banco real): desligados por padrão. Rode com:
   ```bash
-  RUN_DB_TESTS=true npm test
+  RUN_DB_TESTS=true pnpm test
   ```
   Use um banco de **teste** (não o de desenvolvimento nem produção) — os testes
   criam e removem dados reais. Cobrem o fluxo completo: rascunho → token →
@@ -170,8 +175,8 @@ mensagem clara em vez de falhar silenciosamente.
 
 ## Limpar dados de desenvolvimento
 
-- **Banco**: `npm run db:studio` para inspecionar/apagar manualmente, ou
-  `npx prisma migrate reset` para recriar o schema do zero (apaga tudo).
+- **Banco**: `pnpm db:studio` para inspecionar/apagar manualmente, ou
+  `pnpm exec prisma migrate reset` para recriar o schema do zero (apaga tudo).
 - **Fotos em disco**: apague a pasta `.data/uploads` (gitignored).
 - **Sessão do navegador**: no DevTools, remova a chave `antero:session` do
   `localStorage` para forçar a criação de um novo rascunho.
