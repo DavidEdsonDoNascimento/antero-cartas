@@ -141,7 +141,50 @@ export async function createOrder(
 
 // --- Tentativas de pagamento real (Pix / cartão) -----------------------------
 
-const RETRYABLE_STATUSES = new Set(["PENDING", "FAILED", "CANCELLED", "EXPIRED"]);
+const RETRYABLE_STATUSES = ["PENDING", "FAILED", "CANCELLED", "EXPIRED"] as const;
+
+function isRetryable(status: string): boolean {
+  return (RETRYABLE_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Registra a tentativa de pagamento no pedido sem nunca regredir um estado já
+ * resolvido.
+ *
+ * O webhook pode chegar **durante** a chamada ao provedor — cartão é aprovado
+ * de forma síncrona pelo Mercado Pago e a notificação sai quase junto com a
+ * resposta. Uma escrita incondicional de `status: "PENDING"` aqui desfaria a
+ * aprovação e deixaria a carta publicada presa a um pedido "pendente".
+ *
+ * A guarda é o mesmo `updateMany` condicional de `finalizeOrderAsPaid`: uma
+ * única instrução, atômica de verdade (não um read-then-write, que a
+ * isolação padrão do Postgres não protegeria). Se ela não pega o pedido, o
+ * estado decidido pelo webhook prevalece e só a referência da cobrança é
+ * gravada — sem ela o suporte perderia o vínculo com o pagamento.
+ */
+async function recordPaymentAttempt(
+  orderId: string,
+  paymentMethod: "PIX" | "CARD",
+  providerName: string,
+  providerPaymentId: string,
+): Promise<void> {
+  const attempt = {
+    paymentMethod,
+    provider: providerName,
+    providerPaymentId,
+  };
+
+  const claimed = await prisma.order.updateMany({
+    where: { id: orderId, status: { in: [...RETRYABLE_STATUSES] } },
+    data: { ...attempt, status: "PENDING" },
+  });
+  if (claimed.count > 0) return;
+
+  await prisma.order.updateMany({
+    where: { id: orderId, providerPaymentId: null },
+    data: attempt,
+  });
+}
 
 /**
  * Carrega o pedido autorizando pela mesma trilha de sempre (token de edição
@@ -155,7 +198,7 @@ async function loadRetryableOrder(orderId: string, token: string | null) {
   if (!verifyEditToken(token, order.cart.editTokenHash)) {
     throw new ApiError("unauthorized", "Token de edição inválido.");
   }
-  if (!RETRYABLE_STATUSES.has(order.status)) {
+  if (!isRetryable(order.status)) {
     throw new ApiError(
       "forbidden_state",
       "Este pedido já foi concluído e não pode ser pago novamente.",
@@ -198,15 +241,8 @@ export async function createPixPaymentAttempt(
     throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
   }
 
-  const updated = await prisma.order.update({
-    where: { id: order.id },
-    data: {
-      status: "PENDING",
-      paymentMethod: "PIX",
-      provider: provider.name,
-      providerPaymentId: result.providerPaymentId,
-    },
-  });
+  await recordPaymentAttempt(order.id, "PIX", provider.name, result.providerPaymentId);
+  const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
 
   return { order: toSummary(updated), pix: result.pix };
 }
@@ -257,16 +293,9 @@ export async function createCardPaymentAttempt(
   });
 
   // Status fica PENDING independentemente da resposta síncrona do provedor —
-  // só o webhook decide o estado real do pedido.
-  await prisma.order.update({
-    where: { id: order.id },
-    data: {
-      status: "PENDING",
-      paymentMethod: "CARD",
-      provider: provider.name,
-      providerPaymentId: result.providerPaymentId,
-    },
-  });
+  // só o webhook decide o estado real do pedido (inclusive quando ele chega
+  // durante esta chamada; ver recordPaymentAttempt).
+  await recordPaymentAttempt(order.id, "CARD", provider.name, result.providerPaymentId);
   const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
 
   return { order: toSummary(updated), status: result.status, statusDetail: result.statusDetail };

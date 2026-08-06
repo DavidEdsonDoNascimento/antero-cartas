@@ -19,7 +19,7 @@
  * ser removido, já que a relação é `onDelete: SetNull`, não `Cascade`).
  */
 import { randomUUID } from "node:crypto";
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 
 const RUN = process.env.RUN_DB_TESTS === "true" && !!process.env.DATABASE_URL;
 const DB_TIMEOUT = 60_000;
@@ -335,6 +335,179 @@ describe.skipIf(!RUN)("Fase 3 — tentativas de pagamento (integração)", { tim
     });
   });
 });
+
+describe.skipIf(!RUN)(
+  "Fase 3 — corrida: webhook aprova durante a tentativa de pagamento",
+  { timeout: DB_TIMEOUT },
+  () => {
+    let prisma: typeof import("@/lib/db").prisma;
+    // Atribuído dentro de cada teste, depois do doMock, mas referenciado pelo
+    // provedor falso (que só roda depois disso) — daí a declaração aqui.
+    let orderService!: typeof import("@/server/orderService");
+    const cartIdsToClean: string[] = [];
+
+    // Blocos anteriores já importaram orderService: sem limpar o registro
+    // ANTES do doMock, o import devolveria a instância em cache, ligada ao
+    // provedor real — e o teste passaria sem nunca exercitar a corrida.
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(() => {
+      vi.doUnmock("@/server/payment");
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      for (const cartId of cartIdsToClean) {
+        const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
+        await prisma.paymentEvent.deleteMany({ where: { orderId: { in: orders.map((o) => o.id) } } });
+        await prisma.order.deleteMany({ where: { cartId } });
+        await prisma.cart.deleteMany({ where: { id: cartId } });
+      }
+      await prisma.$disconnect();
+    }, DB_TIMEOUT);
+
+    /**
+     * Cartão é aprovado de forma síncrona pelo Mercado Pago, e a notificação
+     * chega quase junto com a resposta — pode chegar ANTES de
+     * `createCardPaymentAttempt` terminar de gravar o pedido. O provedor falso
+     * aqui aplica o webhook exatamente dentro dessa janela.
+     */
+    it("não regride para PENDING um pedido que o webhook já aprovou", async () => {
+      const providerPaymentId = `mp_race_card_${RUN_ID}`;
+
+      vi.doMock("@/server/payment", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("@/server/payment")>();
+        return {
+          ...actual,
+          getPaymentProvider: () => ({
+            name: "mercadopago",
+            async createPayment(input: { orderId: string }) {
+              await orderService.applyMercadoPagoWebhook({
+                provider: "mercadopago",
+                providerEventId: `evt_race_card_${RUN_ID}`,
+                providerPaymentId,
+                externalReference: input.orderId,
+                status: "approved",
+                statusDetail: "accredited",
+                type: "payment",
+              });
+              return { providerPaymentId, status: "paid" as const, statusDetail: "accredited" };
+            },
+            async getPaymentStatus() {
+              return "paid" as const;
+            },
+          }),
+        };
+      });
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      orderService = await import("@/server/orderService");
+
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: "Corrida cartão",
+        message: "Mensagem de teste de integração da Fase 3",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `corrida.cartao.${RUN_ID}@example.com`,
+        acceptTerms: true,
+      });
+
+      const result = await orderService.createCardPaymentAttempt(order.id, editToken, {
+        token: "tok_teste",
+        installments: 1,
+        paymentMethodId: "visa",
+      });
+
+      // O webhook é a fonte de verdade: o pedido tem de continuar PAID.
+      const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(finalOrder.status).toBe("PAID");
+      expect(finalOrder.paidAt).not.toBeNull();
+      expect(result.order.status).toBe("PAID");
+
+      // E a carta publicada não pode ficar órfã de um pedido "pendente".
+      const cartRow = await prisma.cart.findUniqueOrThrow({ where: { id: cart.id } });
+      expect(cartRow.status).toBe("PUBLISHED");
+      expect(cartRow.slug).toBeTruthy();
+
+      // A referência da cobrança continua rastreável para o suporte.
+      expect(finalOrder.providerPaymentId).toBe(providerPaymentId);
+      expect(finalOrder.paymentMethod).toBe("CARD");
+    });
+
+    it("não regride para PENDING um pedido já pago quando a tentativa é Pix", async () => {
+      const providerPaymentId = `mp_race_pix_${RUN_ID}`;
+
+      vi.doMock("@/server/payment", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("@/server/payment")>();
+        return {
+          ...actual,
+          getPaymentProvider: () => ({
+            name: "mercadopago",
+            async createPayment(input: { orderId: string }) {
+              await orderService.applyMercadoPagoWebhook({
+                provider: "mercadopago",
+                providerEventId: `evt_race_pix_${RUN_ID}`,
+                providerPaymentId,
+                externalReference: input.orderId,
+                status: "approved",
+                statusDetail: "accredited",
+                type: "payment",
+              });
+              return {
+                providerPaymentId,
+                status: "paid" as const,
+                pix: { qrCode: "00020126", qrCodeBase64: "iVBORw0KGgo=", expiresAt: null },
+              };
+            },
+            async getPaymentStatus() {
+              return "paid" as const;
+            },
+          }),
+        };
+      });
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      orderService = await import("@/server/orderService");
+
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: "Corrida pix",
+        message: "Mensagem de teste de integração da Fase 3",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `corrida.pix.${RUN_ID}@example.com`,
+        acceptTerms: true,
+      });
+
+      const result = await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(finalOrder.status).toBe("PAID");
+      expect(result.order.status).toBe("PAID");
+      expect(result.pix.qrCode).toBe("00020126");
+
+      const cartRow = await prisma.cart.findUniqueOrThrow({ where: { id: cart.id } });
+      expect(cartRow.status).toBe("PUBLISHED");
+    });
+  },
+);
 
 describe.skipIf(!RUN)(
   "Fase 3 — falha de e-mail não desfaz a publicação (task 013, seção 17)",
