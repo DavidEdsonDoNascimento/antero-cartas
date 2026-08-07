@@ -38,12 +38,22 @@ export class ApiError extends Error {
 
 export function jsonError(err: unknown): Response {
   if (err instanceof ApiError) {
+    // Erro esperado do domínio: código e mensagem já foram escritos para
+    // serem lidos pelo usuário. Não é ruído de servidor, então não loga.
     return Response.json(
       { error: { code: err.code, message: err.message } },
       { status: err.status },
     );
   }
-  // Nunca expõe stack/detalhes internos.
+
+  // Erro não previsto: a resposta pública é deliberadamente opaca (nunca
+  // expõe stack, corpo de resposta de fornecedor, credencial ou detalhe
+  // interno), mas engolir a exceção também no servidor deixaria qualquer
+  // falha real invisível — foi o que aconteceu com uma recusa do Mercado
+  // Pago na criação de Pix, que virou "Erro interno" sem rastro nenhum no
+  // terminal. Registrar aqui é o único ponto por onde toda rota passa.
+  console.error("[api] erro não tratado", err);
+
   return Response.json(
     { error: { code: "server", message: "Erro interno. Tente novamente." } },
     { status: 500 },
