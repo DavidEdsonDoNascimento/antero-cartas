@@ -1,0 +1,13 @@
+-- Backfill isolado (auditoria em docs/0010, seção "Execução posterior"): o
+-- backfill original foi anexado à migration 20260806221907 depois que ela já
+-- tinha sido aplicada, então o UPDATE nunca chegou a rodar de fato (só a
+-- ALTER TABLE, cujo checksum já estava gravado). Esta migration nova aplica
+-- o mesmo UPDATE, agora rastreado corretamente.
+--
+-- Eventos anteriores à coluna processedAt foram registrados pelo código
+-- antigo, que só gravava a linha depois de decidir aplicar (ou não) a
+-- transição. Marcá-los como concluídos preserva a idempotência de sempre:
+-- sem isso eles ficariam com processedAt nulo e um reenvio antigo seria
+-- reprocessado. Reprocessar seria inofensivo (shouldApplyTransition barra a
+-- repetição), mas o comportamento explícito é melhor que o acidental.
+UPDATE "PaymentEvent" SET "processedAt" = "createdAt" WHERE "processedAt" IS NULL;
