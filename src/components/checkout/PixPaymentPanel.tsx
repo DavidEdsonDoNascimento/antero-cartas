@@ -39,45 +39,67 @@ export function PixPaymentPanel({
   const [state, setState] = useState<State>({ step: "creating" });
   const startRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
-  // Guarda contra o duplo-disparo do efeito em desenvolvimento (React
-  // Strict Mode remonta o efeito uma vez de propósito: monta, desmonta,
-  // monta de novo). A limpeza abaixo só impede o setState da primeira
-  // chamada — não cancela a requisição HTTP em si — então sem esta guarda a
-  // segunda montagem dispararia uma SEGUNDA criação de Pix real no servidor.
-  // O ref sobrevive ao par desmonta/monta do Strict Mode (mesma instância do
-  // componente), mas é recriado numa montagem genuinamente nova (ex.: o
-  // usuário volta e escolhe Pix de novo) para permitir uma tentativa nova. A
-  // proteção definitiva contra duplicidade é do servidor
-  // (claimOrReusePixAttempt em orderService.ts) — esta guarda só evita
-  // desperdiçar uma chamada ao provedor que o servidor teria descartado.
-  const requestedForRef = useRef<string | null>(null);
+  /**
+   * Tentativa de criação de Pix em andamento: a identidade dela e a **própria
+   * Promise**. Guardar a Promise (e não só um "já pedi") é o que concilia as
+   * duas exigências que se contradizem sob React Strict Mode, onde o efeito
+   * roda em ciclo setup → cleanup → setup:
+   *
+   * - não disparar dois `createPixPayment` (seriam duas cobranças reais no
+   *   Mercado Pago — incidente de 2026-08-07);
+   * - não perder a resposta da chamada já em andamento (o setup sobrevivente
+   *   precisa ter em que se pendurar; senão a tela fica presa em "Gerando o
+   *   código Pix…" apesar do 201).
+   *
+   * A identidade inclui a tentativa (`attempt`) para que "Tentar novamente"
+   * nunca reaproveite a Promise — possivelmente já rejeitada — da anterior, e
+   * inclui pedido/token para nunca cruzar Promise entre pedidos diferentes.
+   */
+  const attemptRef = useRef<{
+    key: string;
+    promise: Promise<{ order: OrderSummary; pix: PixPaymentData }>;
+  } | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    const key = `${order.id}:${token}`;
-    if (requestedForRef.current === key) return;
-    requestedForRef.current = key;
+    const key = `${order.id}:${token}:${attempt}`;
 
-    let cancelled = false;
-    createPixPayment(order.id, token)
+    let current = attemptRef.current;
+    if (current?.key !== key) {
+      const promise = createPixPayment(order.id, token);
+      // Handler no-op só para marcar a Promise como tratada: os handlers reais
+      // ficam abaixo, mas se nenhuma execução ativa sobrar (desmontagem antes
+      // da resposta) a rejeição viraria unhandledrejection.
+      promise.catch(() => {});
+      current = { key, promise };
+      attemptRef.current = current;
+    }
+
+    // Cada execução do efeito registra os SEUS handlers, com o seu próprio
+    // `active` — só a execução ainda viva escreve no estado. É isto que faz o
+    // setup sobrevivente do Strict Mode consumir a resposta da Promise que o
+    // setup anterior iniciou.
+    let active = true;
+    current.promise
       .then(({ order: updated, pix }) => {
-        if (cancelled) return;
+        if (!active) return;
         startRef.current = Date.now();
         track("payment_pending", { method: "pix" });
         setState({ step: "pending", order: updated, pix });
       })
       .catch((err) => {
-        if (cancelled) return;
-        requestedForRef.current = null; // permite tentar de novo (ver "Tentar novamente")
+        if (!active) return;
         setState({
           step: "error",
           message: err instanceof ApiClientError ? err.message : "Não foi possível gerar o Pix.",
           retryable: true,
         });
       });
+
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [order.id, token]);
+  }, [order.id, token, attempt]);
 
   useEffect(() => {
     if (state.step !== "pending") return;
@@ -142,7 +164,19 @@ export function PixPaymentPanel({
       <Centered>
         <p className="text-vinho">{state.message}</p>
         {state.retryable && (
-          <PrimaryButton onClick={() => setState({ step: "creating" })}>
+          // Trocar o estado para "creating" não basta: as dependências do
+          // efeito não mudariam e nada seria disparado — a tela ficava presa
+          // em "Gerando o código Pix…". Incrementar `attempt` é o gatilho
+          // explícito de uma nova tentativa (e garante uma Promise nova, não
+          // a rejeitada da anterior). Uma nova tentativa aqui não significa
+          // outra cobrança no Mercado Pago: o servidor reaproveita o Pix
+          // existente via claimOrReusePixAttempt/pixIdempotencyKey.
+          <PrimaryButton
+            onClick={() => {
+              setState({ step: "creating" });
+              setAttempt((n) => n + 1);
+            }}
+          >
             Tentar novamente
           </PrimaryButton>
         )}

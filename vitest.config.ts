@@ -13,7 +13,11 @@ export default defineConfig({
     },
   },
   test: {
+    // Padrão continua node (servidor, integração com banco, módulos puros).
+    // Testes de componente pedem DOM caso a caso, com a diretiva
+    // `@vitest-environment jsdom` no topo do arquivo — assim a suíte inteira
+    // não paga o custo de montar um DOM.
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });

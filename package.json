@@ -46,6 +46,7 @@
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
+    "jsdom": "^30.0.1",
     "prisma": "^7.9.0",
     "supabase": "^2.109.1",
     "tailwindcss": "^4",
