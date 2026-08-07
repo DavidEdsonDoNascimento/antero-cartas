@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/server/errors";
 import { getPlan } from "@/config/plans";
@@ -193,6 +194,10 @@ async function recordPaymentAttempt(
           pixQrCode: pix.qrCode,
           pixQrCodeBase64: pix.qrCodeBase64,
           pixExpiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+          // Único ponto que descarta a chave de idempotência: aqui a tentativa
+          // terminou de forma DEFINITIVA (o provedor respondeu e temos o Pix
+          // gravado). Qualquer outro desfecho é ambíguo e precisa preservá-la.
+          pixIdempotencyKey: null,
         }
       : {}),
   };
@@ -235,7 +240,20 @@ export interface PixAttemptResult {
   pix: PixPaymentData;
 }
 
-type PixClaim = { kind: "claimed" } | { kind: "reuse"; result: PixAttemptResult };
+type PixClaim =
+  | { kind: "claimed"; idempotencyKey: string }
+  | { kind: "reuse"; result: PixAttemptResult };
+
+/** Pix já registrado no pedido, pronto para ser reaproveitado como está. */
+type ReusableOrder = { pixQrCode: string; pixQrCodeBase64: string };
+
+function reusablePix(order: {
+  paymentMethod: string;
+  pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
+}): order is typeof order & ReusableOrder {
+  return order.paymentMethod === "PIX" && !!order.pixQrCode && order.pixQrCodeBase64 !== null;
+}
 
 /**
  * Reivindica atomicamente o direito de criar um Pix para o pedido, ou
@@ -247,55 +265,71 @@ type PixClaim = { kind: "claimed" } | { kind: "reuse"; result: PixAttemptResult 
  * pedido cmsixlhc000032ydptvluv4zu recebeu dois PIX reais de uma única ação
  * do usuário).
  *
+ * Devolve junto a `X-Idempotency-Key` a ser enviada ao provedor, **já
+ * persistida**: uma tentativa ainda não resolvida reaproveita exatamente a
+ * chave que gravou antes de chamar o provedor, para que reapresentar uma
+ * operação de resultado desconhecido devolva o mesmo pagamento em vez de
+ * criar um segundo. Chave nova só nasce quando não há tentativa em aberto.
+ *
  * Guarda dedicada, não reaproveita `providerPaymentId`: essa coluna também
  * precisa continuar aceitando troca de método (ex.: cartão recusado, cliente
  * tenta Pix em seguida) sem que esta reivindicação atrapalhe.
  */
 async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
-  const now = new Date();
-  const staleBefore = new Date(now.getTime() - PIX_CLAIM_STALE_MS);
+  // Duas voltas no máximo. Ler a chave e reivindicar são duas instruções, e
+  // entre elas outra requisição pode ter gravado a sua — o compare-and-swap
+  // em `pixIdempotencyKey` detecta isso e a segunda volta relê o estado já
+  // com a chave da outra tentativa. Sem esse CAS, uma reivindicação poderia
+  // sobrescrever a chave de uma operação cujo resultado é desconhecido, que
+  // é exatamente o que precisamos nunca perder.
+  for (let round = 0; round < 2; round++) {
+    const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
 
-  const claimed = await prisma.order.updateMany({
-    where: {
-      id: orderId,
-      status: { in: [...RETRYABLE_STATUSES] },
-      // Só reivindica se não houver Pix válido já registrado para
-      // reaproveitar — sem esta condição, uma chamada sequencial DEPOIS de
-      // uma tentativa já concluída (que limpa pixClaimedAt de volta para
-      // nulo em recordPaymentAttempt) reivindicaria de novo em vez de cair
-      // no reaproveitamento abaixo.
-      pixQrCode: null,
-      OR: [{ pixClaimedAt: null }, { pixClaimedAt: { lt: staleBefore } }],
-    },
-    data: { pixClaimedAt: now },
-  });
-  if (claimed.count > 0) return { kind: "claimed" };
-
-  // Não conseguiu a reserva: outra chamada já está criando o Pix, ou já
-  // existe um Pix válido para reaproveitar. Nunca cria uma segunda cobrança
-  // no provedor a partir daqui.
-  const current = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
-  if (!isRetryable(current.status)) {
-    throw new ApiError(
-      "forbidden_state",
-      "Este pedido já foi concluído e não pode ser pago novamente.",
-    );
-  }
-  if (current.paymentMethod === "PIX" && current.pixQrCode && current.pixQrCodeBase64 !== null) {
-    return {
-      kind: "reuse",
-      result: {
-        order: toSummary(current),
-        pix: {
-          qrCode: current.pixQrCode,
-          qrCodeBase64: current.pixQrCodeBase64,
-          expiresAt: current.pixExpiresAt?.toISOString() ?? null,
+    if (!isRetryable(before.status)) {
+      throw new ApiError(
+        "forbidden_state",
+        "Este pedido já foi concluído e não pode ser pago novamente.",
+      );
+    }
+    if (reusablePix(before)) {
+      return {
+        kind: "reuse",
+        result: {
+          order: toSummary(before),
+          pix: {
+            qrCode: before.pixQrCode,
+            qrCodeBase64: before.pixQrCodeBase64,
+            expiresAt: before.pixExpiresAt?.toISOString() ?? null,
+          },
         },
+      };
+    }
+
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - PIX_CLAIM_STALE_MS);
+    // Chave de uma tentativa anterior ainda não resolvida é reaproveitada tal
+    // e qual; só na ausência dela nasce uma nova.
+    const idempotencyKey = before.pixIdempotencyKey ?? randomUUID();
+
+    const claimed = await prisma.order.updateMany({
+      where: {
+        id: orderId,
+        status: { in: [...RETRYABLE_STATUSES] },
+        // Só reivindica se não houver Pix válido já registrado para
+        // reaproveitar — sem esta condição, uma chamada sequencial DEPOIS de
+        // uma tentativa já concluída (que limpa pixClaimedAt de volta para
+        // nulo em recordPaymentAttempt) reivindicaria de novo em vez de cair
+        // no reaproveitamento acima.
+        pixQrCode: null,
+        pixIdempotencyKey: before.pixIdempotencyKey,
+        OR: [{ pixClaimedAt: null }, { pixClaimedAt: { lt: staleBefore } }],
       },
-    };
+      data: { pixClaimedAt: now, pixIdempotencyKey: idempotencyKey },
+    });
+    if (claimed.count > 0) return { kind: "claimed", idempotencyKey };
   }
 
-  // pixClaimedAt ainda recente e nenhum Pix para reaproveitar: outra chamada
+  // Reserva de outra chamada ainda viva e nenhum Pix para reaproveitar: ela
   // está no meio da criação. Recusa em vez de arriscar uma segunda cobrança.
   throw new ApiError(
     "conflict",
@@ -309,6 +343,12 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
  * chamadas concorrentes ou repetidas para o mesmo pedido nunca criam duas
  * cobranças independentes no Mercado Pago — a segunda reaproveita o mesmo
  * QR Code da primeira, nunca um novo.
+ *
+ * O corpo enviado ao provedor é montado só a partir de campos imutáveis do
+ * pedido (id, amount, currency, dados do comprador — nenhum deles é
+ * reescrito depois da criação do pedido) mais constantes. Por isso reenviar
+ * a mesma `idempotencyKey` sempre reapresenta a MESMA operação, nunca uma
+ * cobrança de valor ou pagador diferente sob uma chave reaproveitada.
  */
 export async function createPixPaymentAttempt(
   orderId: string,
@@ -331,6 +371,7 @@ export async function createPixPaymentAttempt(
         email: order.customerEmail,
         document: order.customerDocument ?? undefined,
       },
+      idempotencyKey: claim.idempotencyKey,
     });
     if (!result.pix) {
       throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
@@ -341,9 +382,13 @@ export async function createPixPaymentAttempt(
 
     return { order: toSummary(updated), pix: result.pix };
   } catch (err) {
-    // Libera a reserva para que uma nova tentativa não precise esperar
-    // PIX_CLAIM_STALE_MS — a chamada ao provedor falhou ou não devolveu Pix,
-    // então não há nada para reaproveitar.
+    // Libera só a RESERVA, para que um retry não precise esperar
+    // PIX_CLAIM_STALE_MS. `pixIdempotencyKey` é deliberadamente preservada:
+    // toda falha que chega aqui é ambígua (timeout, conexão encerrada, 5xx,
+    // resposta sem os dados do Pix) — o Mercado Pago pode ter criado a
+    // cobrança mesmo assim. Só reenviando a MESMA chave o retry recupera
+    // aquele pagamento em vez de criar um segundo. A chave só é descartada
+    // em recordPaymentAttempt, quando a tentativa se resolve de fato.
     await prisma.order.updateMany({ where: { id: order.id }, data: { pixClaimedAt: null } });
     throw err;
   }

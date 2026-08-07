@@ -44,6 +44,15 @@ export interface CreatePaymentInput {
   description?: string;
   payer?: PayerInfo;
   card?: CardPaymentInput;
+  /**
+   * Chave de idempotência da tentativa, decidida e **persistida pelo serviço
+   * antes** desta chamada — nunca gerada aqui dentro. É o que permite
+   * reapresentar com segurança uma operação cujo resultado não conhecemos
+   * (timeout, conexão perdida, processo morto depois que o provedor já criou
+   * o pagamento): reenviando a mesma chave, o provedor devolve o pagamento
+   * original em vez de criar um segundo. Obrigatória para `PIX`.
+   */
+  idempotencyKey?: string;
 }
 
 export interface PixPaymentData {

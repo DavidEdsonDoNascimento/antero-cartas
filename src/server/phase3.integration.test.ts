@@ -689,6 +689,234 @@ describe.skipIf(!RUN)(
 );
 
 describe.skipIf(!RUN)(
+  "Fase 3 — X-Idempotency-Key do Pix sobrevive a timeout, crash e reserva expirada",
+  { timeout: DB_TIMEOUT },
+  () => {
+    let prisma: typeof import("@/lib/db").prisma;
+    let orderService!: typeof import("@/server/orderService");
+    const cartIdsToClean: string[] = [];
+
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(() => {
+      vi.doUnmock("@/server/payment");
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      for (const cartId of cartIdsToClean) {
+        const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
+        await prisma.paymentEvent.deleteMany({ where: { orderId: { in: orders.map((o) => o.id) } } });
+        await prisma.order.deleteMany({ where: { cartId } });
+        await prisma.cart.deleteMany({ where: { id: cartId } });
+      }
+      await prisma.$disconnect();
+    }, DB_TIMEOUT);
+
+    /** "ok" cria normalmente; um Error simula a falha daquela chamada. */
+    type Behavior = "ok" | Error;
+
+    /**
+     * Provedor falso que REGISTRA a chave de idempotência recebida em cada
+     * chamada — é essa lista que prova se uma reapresentação da mesma
+     * tentativa manda a mesma chave (e portanto seria deduplicada pelo
+     * Mercado Pago) ou uma chave nova (que criaria uma segunda cobrança).
+     */
+    async function setupOrder(
+      received: { keys: (string | undefined)[] },
+      behaviors: Behavior[],
+      label: string,
+    ) {
+      // Autossuficiente: um teste que chama setupOrder duas vezes (duas
+      // tentativas lógicas distintas) precisa que o segundo import devolva um
+      // módulo novo, ligado ao novo provedor falso — sem isto o cache
+      // devolveria o primeiro e o segundo contador nunca registraria nada.
+      vi.resetModules();
+
+      vi.doMock("@/server/payment", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("@/server/payment")>();
+        return {
+          ...actual,
+          getPaymentProvider: () => ({
+            name: "mercadopago",
+            async createPayment(input: { idempotencyKey?: string }) {
+              received.keys.push(input.idempotencyKey);
+              const behavior = behaviors[received.keys.length - 1] ?? "ok";
+              // A chave é registrada ANTES de falhar de propósito: no mundo
+              // real o Mercado Pago pode ter criado a cobrança mesmo quando
+              // a resposta não chega até nós.
+              if (behavior !== "ok") throw behavior;
+              const id = `mp_idem_${label}_${received.keys.length}_${RUN_ID}`;
+              return {
+                providerPaymentId: id,
+                status: "pending" as const,
+                pix: { qrCode: `qr_${id}`, qrCodeBase64: `base64_${id}`, expiresAt: null },
+              };
+            },
+            async getPaymentStatus() {
+              return "pending" as const;
+            },
+          }),
+        };
+      });
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      orderService = await import("@/server/orderService");
+
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: label,
+        message: "Mensagem de teste de integração da Fase 3",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `${label}.${RUN_ID}@example.com`.replace(/\s+/g, ""),
+        acceptTerms: true,
+      });
+
+      return { order, editToken };
+    }
+
+    it("a chave é persistida ANTES da chamada ao provedor", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const { order, editToken } = await setupOrder(received, ["ok"], "antes");
+
+      await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(received.keys).toHaveLength(1);
+      expect(received.keys[0]).toBeTruthy();
+    });
+
+    it("timeout preserva a chave e o retry reapresenta exatamente a mesma", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const timeout = new Error("ETIMEDOUT: connection timed out");
+      const { order, editToken } = await setupOrder(received, [timeout, "ok"], "timeout");
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toThrow(
+        /ETIMEDOUT/,
+      );
+
+      // A chave NÃO pode ser descartada: o Mercado Pago pode ter criado a
+      // cobrança mesmo sem a resposta ter chegado até nós.
+      const afterFailure = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(afterFailure.pixIdempotencyKey).toBe(received.keys[0]);
+      expect(afterFailure.pixClaimedAt).toBeNull(); // reserva liberada para o retry
+
+      await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(received.keys).toHaveLength(2);
+      expect(received.keys[1]).toBe(received.keys[0]);
+    });
+
+    it("falha de rede preserva a chave e o retry reapresenta exatamente a mesma", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const network = new Error("ECONNRESET: socket hang up");
+      const { order, editToken } = await setupOrder(received, [network, "ok"], "rede");
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toThrow(
+        /ECONNRESET/,
+      );
+      await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(received.keys).toHaveLength(2);
+      expect(received.keys[1]).toBe(received.keys[0]);
+    });
+
+    it("provedor criou o Pix mas o processo caiu antes de persistir: o retry usa a mesma chave", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      // O provedor registra a chave (= criou a cobrança do lado dele) e só
+      // então a conexão morre — exatamente a janela em que perderíamos o
+      // pagamento se a chave não sobrevivesse.
+      const crash = new Error("processo morreu depois de o Mercado Pago criar o pagamento");
+      const { order, editToken } = await setupOrder(received, [crash, "ok"], "crash");
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toThrow(
+        /processo morreu/,
+      );
+
+      const midOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(midOrder.pixIdempotencyKey).toBe(received.keys[0]);
+      expect(midOrder.pixQrCode).toBeNull(); // nada foi persistido, como no crash real
+
+      await orderService.createPixPaymentAttempt(order.id, editToken);
+      expect(received.keys[1]).toBe(received.keys[0]);
+    });
+
+    it("reserva abandonada e assumida depois de 30s reutiliza a chave persistida", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const crash = new Error("conexão perdida");
+      const { order, editToken } = await setupOrder(received, [crash, "ok"], "abandonada-chave");
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toThrow();
+
+      // Simula o processo que morreu SEM nem liberar a reserva (o catch não
+      // chegou a rodar) — só a expiração de PIX_CLAIM_STALE_MS destrava.
+      await prisma.order.updateMany({
+        where: { id: order.id },
+        data: { pixClaimedAt: new Date(Date.now() - 60_000) },
+      });
+
+      await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(received.keys).toHaveLength(2);
+      expect(received.keys[1]).toBe(received.keys[0]);
+    });
+
+    it("duas chamadas concorrentes usam uma única chave e uma única operação", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const { order, editToken } = await setupOrder(received, ["ok", "ok"], "concorrente-chave");
+
+      await Promise.allSettled([
+        orderService.createPixPaymentAttempt(order.id, editToken),
+        orderService.createPixPaymentAttempt(order.id, editToken),
+      ]);
+
+      expect(received.keys).toHaveLength(1);
+      expect(new Set(received.keys).size).toBe(1);
+    });
+
+    it("Pix já criado continua sendo reaproveitado, sem nova chave nem nova chamada", async () => {
+      const received = { keys: [] as (string | undefined)[] };
+      const { order, editToken } = await setupOrder(received, ["ok"], "reaproveita-chave");
+
+      const first = await orderService.createPixPaymentAttempt(order.id, editToken);
+      const second = await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(received.keys).toHaveLength(1);
+      expect(second.pix).toEqual(first.pix);
+    });
+
+    it("tentativa concluída limpa a chave, e uma tentativa lógica nova recebe outra", async () => {
+      const receivedA = { keys: [] as (string | undefined)[] };
+      const { order: orderA, editToken: tokenA } = await setupOrder(receivedA, ["ok"], "nova-a");
+      await orderService.createPixPaymentAttempt(orderA.id, tokenA);
+
+      // Resolvida de forma definitiva: a chave não pode ficar para trás e ser
+      // reaproveitada por uma operação diferente mais tarde.
+      const doneA = await prisma.order.findUniqueOrThrow({ where: { id: orderA.id } });
+      expect(doneA.pixIdempotencyKey).toBeNull();
+      expect(doneA.pixQrCode).toBeTruthy();
+
+      const receivedB = { keys: [] as (string | undefined)[] };
+      const { order: orderB, editToken: tokenB } = await setupOrder(receivedB, ["ok"], "nova-b");
+      await orderService.createPixPaymentAttempt(orderB.id, tokenB);
+
+      // Pedido diferente = tentativa lógica genuinamente nova = chave nova.
+      expect(receivedB.keys[0]).toBeTruthy();
+      expect(receivedB.keys[0]).not.toBe(receivedA.keys[0]);
+    });
+  },
+);
+
+describe.skipIf(!RUN)(
   "Fase 3 — reprocessamento de webhook interrompido no meio",
   { timeout: DB_TIMEOUT },
   () => {

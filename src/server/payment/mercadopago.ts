@@ -133,9 +133,17 @@ export function createMercadoPagoProvider(options: MercadoPagoOptions = {}): Pay
       };
 
       if (input.method === "PIX") {
+        // Nunca gera a chave aqui: uma chave nova a cada chamada anularia a
+        // proteção justamente no caso que ela existe para cobrir (reapresentar
+        // uma operação cujo resultado não conhecemos). Ela é decidida e
+        // persistida em `claimOrReusePixAttempt` antes desta chamada; ausência
+        // é bug de chamador, não algo para contornar em silêncio.
+        if (!input.idempotencyKey) {
+          throw new Error("Criação de Pix exige idempotencyKey persistida pelo serviço.");
+        }
         const data = await callMercadoPago(cfg, "/v1/payments", {
           method: "POST",
-          headers: { "X-Idempotency-Key": randomUUID() },
+          headers: { "X-Idempotency-Key": input.idempotencyKey },
           body: JSON.stringify({ ...common, payment_method_id: "pix" }),
         });
         return {
@@ -152,6 +160,10 @@ export function createMercadoPagoProvider(options: MercadoPagoOptions = {}): Pay
 
       if (input.method === "CARD") {
         if (!input.card) throw new Error("Dados do cartão ausentes.");
+        // Cartão ainda gera a chave por chamada — mesma limitação que o Pix
+        // tinha. Deliberadamente fora do escopo desta correção (incidente de
+        // Pix); depende de uma auditoria própria, porque o token do cartão só
+        // vale uma vez e o ciclo de retentativa é diferente.
         const data = await callMercadoPago(cfg, "/v1/payments", {
           method: "POST",
           headers: { "X-Idempotency-Key": randomUUID() },

@@ -57,6 +57,7 @@ describe("createMercadoPagoProvider — Pix", () => {
       currency: "BRL",
       method: "PIX",
       payer: { name: "Ana Teste", email: "ana@example.com" },
+      idempotencyKey: "key-do-servico",
     });
 
     expect(result.providerPaymentId).toBe("123456789");
@@ -64,6 +65,11 @@ describe("createMercadoPagoProvider — Pix", () => {
     expect(result.pix?.qrCode).toBe("00020126...");
     expect(result.pix?.qrCodeBase64).toBe("aGVsbG8=");
     expect(result.pix?.expiresAt).toBe("2026-08-01T00:00:00.000-03:00");
+
+    // A chave enviada é exatamente a que o serviço persistiu — nunca uma
+    // gerada aqui dentro, que anularia a idempotência no reenvio.
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["X-Idempotency-Key"]).toBe("key-do-servico");
 
     const body = JSON.parse(String(calls[0].init.body));
     expect(body.payment_method_id).toBe("pix");
@@ -91,8 +97,50 @@ describe("createMercadoPagoProvider — Pix", () => {
       amount: 1000,
       currency: "BRL",
       method: "PIX",
+      idempotencyKey: "key-1",
     });
     expect(result.status).toBe("paid");
+  });
+
+  it("recusa criar Pix sem a chave de idempotência persistida pelo serviço", async () => {
+    // Fail-closed: sem a chave não há como reapresentar a operação com
+    // segurança, e gerar uma aqui dentro é justamente o bug que causou dois
+    // Pix reais no incidente de 2026-08-07.
+    const { impl, calls } = stubFetch(jsonResponse(201, { id: 1, status: "pending" }));
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+
+    await expect(
+      provider.createPayment({ orderId: "o1", amount: 1000, currency: "BRL", method: "PIX" }),
+    ).rejects.toThrow(/idempotencyKey/);
+    expect(calls).toHaveLength(0); // nunca chegou a chamar o Mercado Pago
+  });
+
+  it("reenvia a mesma chave em duas apresentações da mesma tentativa", async () => {
+    const { impl, calls } = stubFetch(
+      jsonResponse(201, {
+        id: 555,
+        status: "pending",
+        point_of_interaction: { transaction_data: { qr_code: "qr", qr_code_base64: "b64" } },
+      }),
+    );
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+    const input = {
+      orderId: "order_retry",
+      amount: 1890,
+      currency: "BRL" as const,
+      method: "PIX" as const,
+      payer: { name: "Ana Teste", email: "ana@example.com" },
+      idempotencyKey: "mesma-chave",
+    };
+
+    await provider.createPayment(input);
+    await provider.createPayment(input);
+
+    const [first, second] = calls;
+    expect((first.init.headers as Record<string, string>)["X-Idempotency-Key"]).toBe("mesma-chave");
+    expect((second.init.headers as Record<string, string>)["X-Idempotency-Key"]).toBe("mesma-chave");
+    // Requisito 8: a mesma chave só pode reapresentar a MESMA operação.
+    expect(second.init.body).toBe(first.init.body);
   });
 });
 
@@ -160,7 +208,13 @@ describe("createMercadoPagoProvider — erros do provedor", () => {
     );
     const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
     await expect(
-      provider.createPayment({ orderId: "o1", amount: 1000, currency: "BRL", method: "PIX" }),
+      provider.createPayment({
+        orderId: "o1",
+        amount: 1000,
+        currency: "BRL",
+        method: "PIX",
+        idempotencyKey: "key-erro",
+      }),
     ).rejects.toThrow(/invalid transaction_amount/);
   });
 });

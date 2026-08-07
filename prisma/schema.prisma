@@ -143,6 +143,13 @@ model Order {
   pixQrCode       String?
   pixQrCodeBase64 String?
   pixExpiresAt    DateTime?
+  /// X-Idempotency-Key enviada ao Mercado Pago na criação do Pix. Gravada
+  /// ANTES da chamada e preservada em toda falha ambígua (timeout, conexão
+  /// perdida, 5xx, processo morto): só reenviando a MESMA chave o Mercado
+  /// Pago devolve o pagamento já criado em vez de criar um segundo. Nula
+  /// enquanto não há tentativa em aberto; uma chave nova só nasce quando a
+  /// tentativa anterior foi resolvida de forma definitiva.
+  pixIdempotencyKey String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
