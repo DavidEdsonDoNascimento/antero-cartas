@@ -45,3 +45,6 @@ next-env.d.ts
 
 # uploads locais de desenvolvimento (StorageProvider de disco)
 /.data/
+
+# Claude Code local permissions
+.claude/settings.local.json
