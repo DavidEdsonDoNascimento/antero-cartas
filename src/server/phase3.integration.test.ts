@@ -510,6 +510,185 @@ describe.skipIf(!RUN)(
 );
 
 describe.skipIf(!RUN)(
+  "Fase 3 — criação de Pix nunca gera dois pagamentos (incidente de 2026-08-07, pedido cmsixlhc000032ydptvluv4zu)",
+  { timeout: DB_TIMEOUT },
+  () => {
+    let prisma: typeof import("@/lib/db").prisma;
+    let orderService!: typeof import("@/server/orderService");
+    const cartIdsToClean: string[] = [];
+
+    beforeEach(() => {
+      vi.resetModules();
+    });
+
+    afterEach(() => {
+      vi.doUnmock("@/server/payment");
+      vi.resetModules();
+    });
+
+    afterAll(async () => {
+      for (const cartId of cartIdsToClean) {
+        const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
+        await prisma.paymentEvent.deleteMany({ where: { orderId: { in: orders.map((o) => o.id) } } });
+        await prisma.order.deleteMany({ where: { cartId } });
+        await prisma.cart.deleteMany({ where: { id: cartId } });
+      }
+      await prisma.$disconnect();
+    }, DB_TIMEOUT);
+
+    /**
+     * Provedor falso que conta quantas vezes `createPayment` foi chamado —
+     * é essa contagem que prova (ou refuta) a causa raiz: duas chamadas de
+     * `createPixPaymentAttempt` para o mesmo pedido não podem resultar em
+     * duas chamadas ao provedor real.
+     */
+    async function setupOrderWithFakeProvider(callCounter: { count: number }, label: string) {
+      vi.doMock("@/server/payment", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("@/server/payment")>();
+        return {
+          ...actual,
+          getPaymentProvider: () => ({
+            name: "mercadopago",
+            async createPayment() {
+              callCounter.count += 1;
+              const id = `mp_dup_${label}_${callCounter.count}_${RUN_ID}`;
+              return {
+                providerPaymentId: id,
+                status: "pending" as const,
+                pix: { qrCode: `qr_${id}`, qrCodeBase64: `base64_${id}`, expiresAt: null },
+              };
+            },
+            async getPaymentStatus() {
+              return "pending" as const;
+            },
+          }),
+        };
+      });
+
+      ({ prisma } = await import("@/lib/db"));
+      const cartService = await import("@/server/cartService");
+      orderService = await import("@/server/orderService");
+
+      const { cart, editToken } = await cartService.createDraft({
+        recipientType: "amigo",
+        title: label,
+        message: "Mensagem de teste de integração da Fase 3",
+        senderName: "Testador",
+      });
+      cartIdsToClean.push(cart.id);
+
+      const order = await orderService.createOrder(editToken, {
+        cartId: cart.id,
+        planType: "LIMITED",
+        customerName: "Comprador",
+        customerEmail: `${label}.${RUN_ID}@example.com`.replace(/\s+/g, ""),
+        acceptTerms: true,
+      });
+
+      return { order, editToken };
+    }
+
+    it("duas chamadas concorrentes para o mesmo pedido criam só um Pix no provedor", async () => {
+      const callCounter = { count: 0 };
+      const { order, editToken } = await setupOrderWithFakeProvider(callCounter, "concorrente");
+
+      // Reproduz exatamente a causa raiz do incidente: duas chamadas de
+      // criação de Pix disparadas quase juntas para o MESMO pedido (no
+      // navegador, isso veio do useEffect do PixPaymentPanel sendo invocado
+      // duas vezes pelo React Strict Mode em desenvolvimento). Uma corrida
+      // genuína pode terminar de duas formas seguras — as duas chamadas
+      // convergindo pro mesmo Pix, ou a perdedora recusada com um erro de
+      // conflito controlado — nunca com um segundo pagamento independente
+      // no provedor nem com um QR Code diferente do registrado no pedido.
+      // `allSettled` (em vez de `all`) evita que o teste seja instável só
+      // porque o timing exato de qual chamada "ganha" não é determinístico.
+      const settled = await Promise.allSettled([
+        orderService.createPixPaymentAttempt(order.id, editToken),
+        orderService.createPixPaymentAttempt(order.id, editToken),
+      ]);
+
+      // O provedor (Mercado Pago) só pode ter sido chamado uma vez — nunca
+      // duas cobranças independentes para uma única ação do usuário, não
+      // importa como a corrida termina.
+      expect(callCounter.count).toBe(1);
+
+      const fulfilled = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const rejected = settled.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+
+      // Pelo menos uma das duas tem que ter sucesso — a corrida nunca pode
+      // derrubar as duas.
+      expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+
+      // Nunca podemos mostrar ao usuário um QR Code diferente do que fica
+      // registrado no pedido — era exatamente esse o perigo do incidente
+      // original (uma das duas respostas ficava associada a um pagamento
+      // "stale", que o webhook nunca confirmaria).
+      if (fulfilled.length === 2) {
+        expect(fulfilled[0].pix).toEqual(fulfilled[1].pix);
+        expect(fulfilled[0].order.status).toBe(fulfilled[1].order.status);
+      }
+      for (const reason of rejected) {
+        expect(reason).toMatchObject({ code: "conflict" });
+      }
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(finalOrder.pixQrCode).toBe(fulfilled[0].pix.qrCode);
+      expect(finalOrder.pixClaimedAt).toBeNull(); // reserva liberada ao concluir
+    });
+
+    it("chamada repetida depois que a primeira já criou o Pix reaproveita a mesma cobrança", async () => {
+      const callCounter = { count: 0 };
+      const { order, editToken } = await setupOrderWithFakeProvider(callCounter, "sequencial");
+
+      const first = await orderService.createPixPaymentAttempt(order.id, editToken);
+      const second = await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(callCounter.count).toBe(1);
+      expect(second.pix).toEqual(first.pix);
+      expect(second.order.status).toBe(first.order.status);
+    });
+
+    it("uma reserva de Pix abandonada (processo morto) não trava o pedido para sempre", async () => {
+      const callCounter = { count: 0 };
+      const { order, editToken } = await setupOrderWithFakeProvider(callCounter, "abandonada");
+
+      // Simula um processo que reivindicou a criação do Pix e morreu antes
+      // de chamar o provedor — sem isto, o teste teria que esperar
+      // PIX_CLAIM_STALE_MS de verdade.
+      await prisma.order.updateMany({
+        where: { id: order.id },
+        data: { pixClaimedAt: new Date(Date.now() - 60_000) },
+      });
+
+      const result = await orderService.createPixPaymentAttempt(order.id, editToken);
+
+      expect(callCounter.count).toBe(1);
+      expect(result.pix.qrCode).toBeTruthy();
+
+      const finalOrder = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(finalOrder.pixClaimedAt).toBeNull();
+    });
+
+    it("uma reserva de Pix recente sem resultado ainda recusa a segunda chamada, sem criar um novo pagamento", async () => {
+      const callCounter = { count: 0 };
+      const { order, editToken } = await setupOrderWithFakeProvider(callCounter, "em-andamento");
+
+      // Simula uma criação genuinamente em andamento: reservada agora mesmo,
+      // provedor ainda não respondeu (nenhum Pix para reaproveitar ainda).
+      await prisma.order.updateMany({
+        where: { id: order.id },
+        data: { pixClaimedAt: new Date() },
+      });
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toMatchObject({
+        code: "conflict",
+      });
+      expect(callCounter.count).toBe(0);
+    });
+  },
+);
+
+describe.skipIf(!RUN)(
   "Fase 3 — reprocessamento de webhook interrompido no meio",
   { timeout: DB_TIMEOUT },
   () => {

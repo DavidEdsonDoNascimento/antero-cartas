@@ -129,6 +129,21 @@ model Order {
   status        OrderStatus   @default(PENDING)
   paidAt        DateTime?
 
+  /// Reserva atômica de uma criação de Pix em andamento. Nula fora de uma
+  /// criação em andamento; evita que duas chamadas concorrentes para o mesmo
+  /// pedido (Strict Mode, duplo clique, retry de rede) criem dois pagamentos
+  /// Pix independentes no provedor — só quem reivindica esta coluna (de NULL
+  /// para agora) segue em frente para chamar o provedor. Tratada como
+  /// abandonada depois de PIX_CLAIM_STALE_MS (processo morreu no meio) para
+  /// nunca travar o pedido permanentemente.
+  pixClaimedAt    DateTime?
+  /// Cópia do Pix devolvido pelo provedor na criação — permite reaproveitar
+  /// a mesma cobrança (mesmo QR Code) numa chamada repetida em vez de criar
+  /// uma nova no provedor.
+  pixQrCode       String?
+  pixQrCodeBase64 String?
+  pixExpiresAt    DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

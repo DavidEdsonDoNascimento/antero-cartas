@@ -148,6 +148,18 @@ function isRetryable(status: string): boolean {
 }
 
 /**
+ * Janela em que uma reserva de criação de Pix (`Order.pixClaimedAt`) é
+ * considerada "em andamento". Depois disso sem a reserva ter sido liberada
+ * — processo morreu no meio da chamada ao provedor: timeout de função
+ * serverless, queda de conexão — uma nova tentativa pode assumir a reserva
+ * em vez de ficar bloqueada para sempre. Generosa o bastante para cobrir a
+ * latência real de uma chamada ao Mercado Pago (segundos), curta o bastante
+ * para não deixar o comprador esperando muito se o processo anterior
+ * realmente morreu.
+ */
+const PIX_CLAIM_STALE_MS = 30_000;
+
+/**
  * Registra a tentativa de pagamento no pedido sem nunca regredir um estado já
  * resolvido.
  *
@@ -167,11 +179,22 @@ async function recordPaymentAttempt(
   paymentMethod: "PIX" | "CARD",
   providerName: string,
   providerPaymentId: string,
+  pix?: PixPaymentData,
 ): Promise<void> {
   const attempt = {
     paymentMethod,
     provider: providerName,
     providerPaymentId,
+    // Libera a reserva de criação de Pix (se houver uma) — a tentativa já
+    // está resolvida, com ou sem sucesso na hora de gravar.
+    pixClaimedAt: null,
+    ...(pix
+      ? {
+          pixQrCode: pix.qrCode,
+          pixQrCodeBase64: pix.qrCodeBase64,
+          pixExpiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+        }
+      : {}),
   };
 
   const claimed = await prisma.order.updateMany({
@@ -212,39 +235,118 @@ export interface PixAttemptResult {
   pix: PixPaymentData;
 }
 
+type PixClaim = { kind: "claimed" } | { kind: "reuse"; result: PixAttemptResult };
+
+/**
+ * Reivindica atomicamente o direito de criar um Pix para o pedido, ou
+ * devolve um Pix já válido para reaproveitar. Nunca deixa duas chamadas —
+ * Strict Mode (dev), duplo clique, retry de rede, requisição genuinamente
+ * concorrente — criarem dois pagamentos independentes no provedor: só quem
+ * consegue mover `pixClaimedAt` de nulo (ou expirado) para agora segue em
+ * frente para chamar o Mercado Pago (task 013; incidente de 2026-08-07 —
+ * pedido cmsixlhc000032ydptvluv4zu recebeu dois PIX reais de uma única ação
+ * do usuário).
+ *
+ * Guarda dedicada, não reaproveita `providerPaymentId`: essa coluna também
+ * precisa continuar aceitando troca de método (ex.: cartão recusado, cliente
+ * tenta Pix em seguida) sem que esta reivindicação atrapalhe.
+ */
+async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - PIX_CLAIM_STALE_MS);
+
+  const claimed = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: { in: [...RETRYABLE_STATUSES] },
+      // Só reivindica se não houver Pix válido já registrado para
+      // reaproveitar — sem esta condição, uma chamada sequencial DEPOIS de
+      // uma tentativa já concluída (que limpa pixClaimedAt de volta para
+      // nulo em recordPaymentAttempt) reivindicaria de novo em vez de cair
+      // no reaproveitamento abaixo.
+      pixQrCode: null,
+      OR: [{ pixClaimedAt: null }, { pixClaimedAt: { lt: staleBefore } }],
+    },
+    data: { pixClaimedAt: now },
+  });
+  if (claimed.count > 0) return { kind: "claimed" };
+
+  // Não conseguiu a reserva: outra chamada já está criando o Pix, ou já
+  // existe um Pix válido para reaproveitar. Nunca cria uma segunda cobrança
+  // no provedor a partir daqui.
+  const current = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+  if (!isRetryable(current.status)) {
+    throw new ApiError(
+      "forbidden_state",
+      "Este pedido já foi concluído e não pode ser pago novamente.",
+    );
+  }
+  if (current.paymentMethod === "PIX" && current.pixQrCode && current.pixQrCodeBase64 !== null) {
+    return {
+      kind: "reuse",
+      result: {
+        order: toSummary(current),
+        pix: {
+          qrCode: current.pixQrCode,
+          qrCodeBase64: current.pixQrCodeBase64,
+          expiresAt: current.pixExpiresAt?.toISOString() ?? null,
+        },
+      },
+    };
+  }
+
+  // pixClaimedAt ainda recente e nenhum Pix para reaproveitar: outra chamada
+  // está no meio da criação. Recusa em vez de arriscar uma segunda cobrança.
+  throw new ApiError(
+    "conflict",
+    "Já existe uma criação de Pix em andamento para este pedido. Aguarde alguns instantes e tente novamente.",
+  );
+}
+
 /**
  * Cria (ou recria, se a tentativa anterior expirou/falhou) um pagamento Pix
- * para o pedido. Pode ser chamada mais de uma vez para o mesmo pedido — cada
- * chamada é uma nova cobrança Pix no Mercado Pago; não há deduplicação de
- * cliques duplos aqui (o botão do cliente já evita reenvio — ver
- * CheckoutClient), então trate isso como limitação conhecida, não bug.
+ * para o pedido. Idempotente por construção via `claimOrReusePixAttempt`:
+ * chamadas concorrentes ou repetidas para o mesmo pedido nunca criam duas
+ * cobranças independentes no Mercado Pago — a segunda reaproveita o mesmo
+ * QR Code da primeira, nunca um novo.
  */
 export async function createPixPaymentAttempt(
   orderId: string,
   token: string | null,
 ): Promise<PixAttemptResult> {
   const order = await loadRetryableOrder(orderId, token);
+
+  const claim = await claimOrReusePixAttempt(order.id);
+  if (claim.kind === "reuse") return claim.result;
+
   const provider = getPaymentProvider();
+  try {
+    const result = await provider.createPayment({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      method: "PIX",
+      payer: {
+        name: order.customerName,
+        email: order.customerEmail,
+        document: order.customerDocument ?? undefined,
+      },
+    });
+    if (!result.pix) {
+      throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
+    }
 
-  const result = await provider.createPayment({
-    orderId: order.id,
-    amount: order.amount,
-    currency: order.currency,
-    method: "PIX",
-    payer: {
-      name: order.customerName,
-      email: order.customerEmail,
-      document: order.customerDocument ?? undefined,
-    },
-  });
-  if (!result.pix) {
-    throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
+    await recordPaymentAttempt(order.id, "PIX", provider.name, result.providerPaymentId, result.pix);
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+
+    return { order: toSummary(updated), pix: result.pix };
+  } catch (err) {
+    // Libera a reserva para que uma nova tentativa não precise esperar
+    // PIX_CLAIM_STALE_MS — a chamada ao provedor falhou ou não devolveu Pix,
+    // então não há nada para reaproveitar.
+    await prisma.order.updateMany({ where: { id: order.id }, data: { pixClaimedAt: null } });
+    throw err;
   }
-
-  await recordPaymentAttempt(order.id, "PIX", provider.name, result.providerPaymentId);
-  const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
-
-  return { order: toSummary(updated), pix: result.pix };
 }
 
 export interface CardAttemptInput {

@@ -39,8 +39,24 @@ export function PixPaymentPanel({
   const [state, setState] = useState<State>({ step: "creating" });
   const startRef = useRef<number | null>(null);
   const [copied, setCopied] = useState(false);
+  // Guarda contra o duplo-disparo do efeito em desenvolvimento (React
+  // Strict Mode remonta o efeito uma vez de propósito: monta, desmonta,
+  // monta de novo). A limpeza abaixo só impede o setState da primeira
+  // chamada — não cancela a requisição HTTP em si — então sem esta guarda a
+  // segunda montagem dispararia uma SEGUNDA criação de Pix real no servidor.
+  // O ref sobrevive ao par desmonta/monta do Strict Mode (mesma instância do
+  // componente), mas é recriado numa montagem genuinamente nova (ex.: o
+  // usuário volta e escolhe Pix de novo) para permitir uma tentativa nova. A
+  // proteção definitiva contra duplicidade é do servidor
+  // (claimOrReusePixAttempt em orderService.ts) — esta guarda só evita
+  // desperdiçar uma chamada ao provedor que o servidor teria descartado.
+  const requestedForRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const key = `${order.id}:${token}`;
+    if (requestedForRef.current === key) return;
+    requestedForRef.current = key;
+
     let cancelled = false;
     createPixPayment(order.id, token)
       .then(({ order: updated, pix }) => {
@@ -51,6 +67,7 @@ export function PixPaymentPanel({
       })
       .catch((err) => {
         if (cancelled) return;
+        requestedForRef.current = null; // permite tentar de novo (ver "Tentar novamente")
         setState({
           step: "error",
           message: err instanceof ApiClientError ? err.message : "Não foi possível gerar o Pix.",
