@@ -1,14 +1,22 @@
 import * as Sentry from "@sentry/nextjs";
 import { baseSentryOptions, SERVER_DSN } from "@/lib/sentryOptions";
+import { assertPaymentModeConsistency } from "@/config/paymentMode";
 
 /**
- * Inicialização do Sentry no servidor e no runtime edge (task 011, seção 9.1).
+ * Inicialização do servidor e do runtime edge (task 011, seção 9.1).
  *
- * Sem DSN nada é inicializado: `captureRequestError` vira no-op e a aplicação
- * segue normalmente. É o que permite rodar local, em CI e em produção antes
- * de existir a conta, sem `try/catch` espalhado.
+ * Sem DSN nada é inicializado no Sentry: `captureRequestError` vira no-op e a
+ * aplicação segue normalmente. É o que permite rodar local, em CI e em
+ * produção antes de existir a conta, sem `try/catch` espalhado.
  */
 export function register(): void {
+  // Antes de qualquer outra coisa, e independente do Sentry: um servidor cujo
+  // modo de pagamento diverge do que o navegador vai receber não deve atender
+  // requisição nenhuma. `next.config.ts` já barra dev/build; esta checagem
+  // cobre o boot do runtime (`next start`, cold start em serverless), onde as
+  // variáveis vêm do ambiente e podem não ser as do build.
+  assertPaymentModeConsistency(process.env.PAYMENT_MODE, process.env.NEXT_PUBLIC_PAYMENT_MODE);
+
   if (!SERVER_DSN) return;
 
   // Um único `init` cobre os dois runtimes; o SDK escolhe o transporte certo

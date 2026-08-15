@@ -2,6 +2,7 @@
  * Feature flags do produto.
  * Interfaces preparadas para evolução sem acoplar o MVP a fornecedores.
  */
+import { parsePaymentMode } from "./paymentMode";
 
 function readBool(value: string | undefined, fallback = false): boolean {
   if (value === undefined) return fallback;
@@ -18,8 +19,16 @@ export const flags = {
   /**
    * Modo de pagamento. "mock" para desenvolvimento/demonstração,
    * "real" quando um PaymentProvider de produção estiver plugado (Fase 3).
+   *
+   * Validado de verdade, não assertado: um `as "mock" | "real"` deixava
+   * "REAL"/"prod"/"" passarem pelo compilador e caírem no ramo "real" da UI.
+   * Só a variável pública é lida aqui — a consistência com `PAYMENT_MODE`
+   * (privada do servidor) é checada em `next.config.ts` e `instrumentation.ts`.
    */
-  PAYMENT_MODE: (process.env.NEXT_PUBLIC_PAYMENT_MODE ?? "mock") as "mock" | "real",
+  PAYMENT_MODE: parsePaymentMode(
+    process.env.NEXT_PUBLIC_PAYMENT_MODE,
+    "NEXT_PUBLIC_PAYMENT_MODE",
+  ),
 
   /**
    * Espelho público de ALLOW_MOCK_PAYMENT_CONFIRMATION (server-only). Decide

@@ -52,9 +52,26 @@ describe("getPaymentProvider", () => {
     expect(getPaymentProvider().name).toBe("mercadopago");
   });
 
-  it("qualquer valor diferente de 'real' cai para mock (fail-safe)", async () => {
-    vi.stubEnv("PAYMENT_MODE", "banana");
+  it("PAYMENT_MODE ausente cai para mock (padrão preservado)", async () => {
     const { getPaymentProvider } = await loadPayment();
-    expect(getPaymentProvider().name).toBe("mock");
+    const original = process.env.PAYMENT_MODE;
+    delete process.env.PAYMENT_MODE;
+    try {
+      expect(getPaymentProvider().name).toBe("mock");
+    } finally {
+      if (original !== undefined) process.env.PAYMENT_MODE = original;
+    }
+  });
+
+  /**
+   * Antes um valor inválido virava "mock" silenciosamente ("fail-safe"), o
+   * que transformava um typo em PAYMENT_MODE numa loja incapaz de cobrar sem
+   * nenhum sinal. Agora é erro de configuração explícito.
+   */
+  it("valor inválido lança em vez de cair para mock silenciosamente", async () => {
+    vi.stubEnv("PAYMENT_MODE", "banana");
+    const { getPaymentProvider, getPaymentMode } = await loadPayment();
+    expect(() => getPaymentMode()).toThrow(/PAYMENT_MODE/);
+    expect(() => getPaymentProvider()).toThrow(/valor inválido/i);
   });
 });

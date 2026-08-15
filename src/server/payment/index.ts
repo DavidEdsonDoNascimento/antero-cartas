@@ -1,9 +1,16 @@
 import type { PaymentProvider } from "./PaymentProvider";
+import { parsePaymentMode, type PaymentMode } from "@/config/paymentMode";
 import { createMockPaymentProvider } from "./mock";
 import { createMercadoPagoProvider } from "./mercadopago";
 
-export function getPaymentMode(): "mock" | "real" {
-  return (process.env.PAYMENT_MODE ?? "mock") === "real" ? "real" : "mock";
+/**
+ * Modo declarado pelo servidor. Um valor inválido é erro de configuração e
+ * lança: o "fail-safe" anterior (qualquer coisa != "real" virava "mock")
+ * transformava um typo em `PAYMENT_MODE` numa loja silenciosamente incapaz
+ * de cobrar. Ausente continua sendo "mock".
+ */
+export function getPaymentMode(): PaymentMode {
+  return parsePaymentMode(process.env.PAYMENT_MODE, "PAYMENT_MODE");
 }
 
 /**
