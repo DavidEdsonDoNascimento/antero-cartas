@@ -254,8 +254,13 @@ function CheckoutForm({
           </span>
         </label>
 
+        {/* Mesmo padrão de StepPlan.tsx: o aviso segue o modo de pagamento.
+            Em modo real o cliente É cobrado de verdade — prometer o contrário
+            aqui seria falso e ainda apareceria depois de o dinheiro sair. */}
         <div className="rounded-xl border border-dourado/40 bg-dourado/10 p-3 text-center text-xs text-grafite/70">
-          Modo demonstração: nenhuma cobrança real será feita nesta etapa.
+          {flags.PAYMENT_MODE === "mock"
+            ? "Modo demonstração: nenhuma cobrança real será feita nesta etapa."
+            : "Seu pagamento será processado com segurança pelo Mercado Pago."}
         </div>
 
         {error && <p className="text-sm text-vinho">{error}</p>}

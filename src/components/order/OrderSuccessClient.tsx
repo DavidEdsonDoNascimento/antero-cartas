@@ -7,6 +7,7 @@ import { reduceOrderPoll, type PollUiState } from "@/lib/orderPolling";
 import { clearSession } from "@/lib/cartSession";
 import { clearDraft } from "@/lib/storage";
 import { getPlan } from "@/config/plans";
+import { flags } from "@/config/flags";
 import { whatsappShareUrl } from "@/lib/whatsapp";
 import { track } from "@/lib/analytics";
 import { site } from "@/config/site";
@@ -187,11 +188,17 @@ function PaidView({
         </button>
       </div>
 
+      {/* `OrderResult` não carrega o estado do EmailDelivery, então o cliente
+          não tem como comprovar a entrega. Em modo real, afirmar "enviamos"
+          seria uma promessa que esta tela não pode sustentar — aponta-se o que
+          está de fato disponível aqui. */}
       <p className="mt-3 text-xs text-grafite/50">
         {plan.durationDays
           ? `Disponível por ${plan.durationDays} dias.`
           : "Sem data para expirar."}{" "}
-        Enviamos (modo demonstração) um e-mail de confirmação com o link e o QR Code.
+        {flags.PAYMENT_MODE === "mock"
+          ? "Enviamos (modo demonstração) um e-mail de confirmação com o link e o QR Code."
+          : "Guarde o link e o QR Code acima — eles continuam disponíveis nesta página."}
       </p>
 
       <div className="mt-4 flex flex-col gap-2">
