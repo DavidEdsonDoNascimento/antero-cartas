@@ -10,13 +10,28 @@
  * nunca o banco de desenvolvimento ou produção. Os dados criados aqui são
  * removidos ao final de cada bloco.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
 
 const RUN = process.env.RUN_DB_TESTS === "true" && !!process.env.DATABASE_URL;
 
 // Banco remoto (ex.: Supabase) tem latência de rede por query; cada teste faz
 // vários round-trips. Timeout generoso para não falhar por latência (não bug).
 const DB_TIMEOUT = 60_000;
+
+/**
+ * `mockConfirmOrder` é fail-closed: exige PAYMENT_MODE=mock **e**
+ * ALLOW_MOCK_PAYMENT_CONFIRMATION=true (ver `src/server/payment/index.ts`).
+ *
+ * O `.env.local` do desenvolvedor é carregado pelo vitest.config e pode estar
+ * em PAYMENT_MODE=real (sandbox do Mercado Pago). Herdar esse valor faria o
+ * resultado do teste depender da máquina em que ele roda, então cada teste que
+ * exercita o fluxo mock declara o ambiente de que precisa. O `afterEach` abaixo
+ * desfaz os stubs, e o guard de produção continua exatamente como está.
+ */
+function useMockPaymentConfirmation(): void {
+  vi.stubEnv("PAYMENT_MODE", "mock");
+  vi.stubEnv("ALLOW_MOCK_PAYMENT_CONFIRMATION", "true");
+}
 
 describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TIMEOUT }, () => {
   let prisma: typeof import("@/lib/db").prisma;
@@ -31,6 +46,10 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
     cartService = await import("@/server/cartService");
     orderService = await import("@/server/orderService");
     ({ getStorage } = await import("@/server/storage"));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -138,6 +157,8 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
   });
 
   it("fluxo completo: pedido -> confirmação mock idempotente -> publicação -> consulta pública -> e-mail único", async () => {
+    useMockPaymentConfirmation();
+
     const { cart, editToken } = await cartService.createDraft({
       recipientType: "amigo",
       title: "Fluxo completo",
@@ -180,6 +201,8 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
   });
 
   it("carta expirada não é retornada pela rota pública", async () => {
+    useMockPaymentConfirmation();
+
     const { cart, editToken } = await cartService.createDraft({
       recipientType: "mae",
       title: "Expira",
@@ -206,6 +229,8 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
   });
 
   it("confirmação mock de falha/expiração não publica a carta", async () => {
+    useMockPaymentConfirmation();
+
     const { cart, editToken } = await cartService.createDraft({
       recipientType: "pai",
       title: "Falha",

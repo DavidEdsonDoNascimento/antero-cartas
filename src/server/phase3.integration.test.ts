@@ -25,6 +25,22 @@ const RUN = process.env.RUN_DB_TESTS === "true" && !!process.env.DATABASE_URL;
 const DB_TIMEOUT = 60_000;
 const RUN_ID = randomUUID().slice(0, 8);
 
+/**
+ * `mockConfirmOrder` é fail-closed: exige PAYMENT_MODE=mock **e**
+ * ALLOW_MOCK_PAYMENT_CONFIRMATION=true (ver `src/server/payment/index.ts`).
+ *
+ * O `.env.local` do desenvolvedor é carregado pelo vitest.config e pode estar
+ * em PAYMENT_MODE=real (sandbox do Mercado Pago). Herdar esse valor faria o
+ * resultado do teste depender da máquina em que ele roda, então os poucos
+ * testes daqui que usam a confirmação mock como atalho para chegar em PAID
+ * declaram o ambiente de que precisam. Cada bloco desfaz os stubs no
+ * `afterEach`, e o guard de produção continua exatamente como está.
+ */
+function useMockPaymentConfirmation(): void {
+  vi.stubEnv("PAYMENT_MODE", "mock");
+  vi.stubEnv("ALLOW_MOCK_PAYMENT_CONFIRMATION", "true");
+}
+
 describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { timeout: DB_TIMEOUT }, () => {
   let prisma: typeof import("@/lib/db").prisma;
   let cartService: typeof import("@/server/cartService");
@@ -275,6 +291,10 @@ describe.skipIf(!RUN)("Fase 3 — tentativas de pagamento (integração)", { tim
     orderService = await import("@/server/orderService");
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   afterAll(async () => {
     for (const cartId of cartIdsToClean) {
       await prisma.order.deleteMany({ where: { cartId } });
@@ -284,6 +304,8 @@ describe.skipIf(!RUN)("Fase 3 — tentativas de pagamento (integração)", { tim
   }, DB_TIMEOUT);
 
   it("recusa nova tentativa de pagamento para pedido já PAID", async () => {
+    useMockPaymentConfirmation();
+
     const { cart, editToken } = await cartService.createDraft({
       recipientType: "amigo",
       title: "Já pago",
@@ -1122,6 +1144,7 @@ describe.skipIf(!RUN)(
       // que tentar enviar — força exatamente o caso "e-mail falha" sem mock.
       vi.stubEnv("EMAIL_MODE", "real");
       vi.stubEnv("RESEND_API_KEY", "");
+      useMockPaymentConfirmation();
 
       ({ prisma } = await import("@/lib/db"));
       const cartService = await import("@/server/cartService");
