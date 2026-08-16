@@ -217,34 +217,56 @@ os dois seeds ficam ou saem do remoto).
 
 ## 6. Estratégia de migration em produção
 
-**Decisão: migrations NÃO rodam dentro do Build Command da Vercel.** Elas são
-um passo manual e deliberado, feito pelo desenvolvedor antes de cada deploy
-que muda o schema — não automático a cada push.
+**Decisão (revisada em 2026-08-16): migrations versionadas são aplicadas
+automaticamente no build de Production da Vercel.** Antes eram um passo
+manual anterior ao deploy; a reversão foi paga com um incidente.
 
-### Por que não simplesmente colocar no Build Command
-`prisma migrate deploy` é idempotente (só aplica migrations pendentes) e por
-si só seria seguro rodar a cada build. O problema não é a idempotência — é
-tudo em volta dela:
-- **Deployments de Preview** nunca têm `DATABASE_URL` de produção (seção 3) —
-  então nem poderiam rodar migration mesmo se estivesse no build command
-  compartilhado; mas isso também significa que colocar o comando ali só
-  funcionaria de fato no ambiente Production, exigindo dois Build Commands
-  diferentes por ambiente (complexidade extra sem necessidade real).
+### Por que a decisão anterior foi revertida
+O modelo manual funcionava enquanto alguém lembrasse dele. Em 2026-08-16 o
+`POST /api/orders` passou a devolver **HTTP 500** em produção: o código da
+Fase 3 tinha sido publicado, mas as cinco migrations posteriores ao `init`
+nunca foram aplicadas ao banco. `Order.pixClaimedAt` não existia e o Prisma
+respondia `P2022` em toda criação de pedido — no checkout, depois do
+comprador preencher os dados.
+
+A causa não foi um erro de julgamento pontual: era o próprio desenho. Um
+passo manual obrigatório entre "código novo" e "schema novo" cria uma janela
+em que a aplicação roda contra um banco incompatível, e a janela só fecha se
+ninguém esquecer. Amarrar a migration ao build fecha a janela por
+construção.
+
+### O que o modelo automático faz — e o que continua sendo seu
+`scripts/vercelProductionMigrate.mjs` roda como `prebuild`, antes de
+`prisma generate` e de `next build`:
+- aplica migrations **somente** quando `VERCEL_ENV=production` — Preview,
+  development e build local não tocam o banco de produção;
+- **falha o build** se `DATABASE_URL` ou `DIRECT_URL` estiverem ausentes ou
+  vazias em Production, antes de qualquer conexão;
+- roda `pnpm db:migrate:deploy` com `APP_ENV=production` e
+  `ALLOW_PRISMA_CLI_PRODUCTION=true` (o guard do D49);
+- usa a `DIRECT_URL` pela preferência já existente em `prisma.config.ts`
+  (conexão direta, não o pooler);
+- nunca imprime valor de variável — só o nome da que faltou.
+
+As ressalvas da decisão original **continuam válidas** e agora são
+responsabilidade sua no momento do deploy, não do script:
+- **Falha no meio da migration**: o build falha e a Vercel mantém a versão
+  anterior no ar, mas o banco já mudou. Confira o estado antes de tentar de
+  novo — `migrate deploy` é idempotente e retomar é seguro, mas o diagnóstico
+  não é automático.
+- **Rollback**: reverter um deploy na Vercel **não** reverte uma migration
+  aplicada. Continua exigindo passo consciente.
+- **Migration arriscada** (remover coluna, mudar tipo): faça `pg_dump` antes
+  (seção 4) e considere aplicar manualmente pelo procedimento abaixo, em vez
+  de deixar para o build. Migrations puramente aditivas não precisam disso.
 - **Builds concorrentes**: dois deploys de produção próximos rodariam
-  `migrate deploy` em paralelo. O Prisma usa um lock a nível de banco para
-  isso (relativamente seguro), mas é uma variável a menos para gerenciar se a
-  migration simplesmente não roda de forma automática.
-- **Falha no meio da migration**: se `migrate deploy` aplicar parte do schema
-  e falhar, o **build inteiro falha** e a Vercel mantém a versão anterior no
-  ar — mas o banco já ficou com o schema novo (parcial ou não) enquanto o
-  código antigo continua rodando contra ele. Sem controle manual, não há
-  window para conferir isso antes do próximo deploy.
-- **Rollback**: reverter um deploy da Vercel não reverte uma migration já
-  aplicada. Precisa ser um passo consciente, não escondido dentro do build.
+  `migrate deploy` em paralelo; o Prisma protege com lock a nível de banco.
 
-### Como funciona na prática
-1. Antes de um deploy que muda `prisma/schema.prisma`, rode a migration
-   manualmente contra produção, definindo as credenciais **só para aquele
+### Aplicação manual (emergência e migration arriscada)
+O procedimento manual não foi removido — ele continua sendo a saída quando
+você precisa aplicar antes do deploy, ou aplicar sem publicar código:
+
+1. Rode a migration contra produção definindo as credenciais **só para aquele
    comando** (nunca em `.env.local`):
    ```bash
    # bash — variáveis só para este comando (não persistem no shell)
@@ -270,12 +292,35 @@ tudo em volta dela:
 3. Para uma migration considerada arriscada (remover coluna, mudar tipo),
    faça um `pg_dump` antes (seção 4) — nunca em migrations puramente aditivas.
 
-**Build Command da Vercel: o padrão da plataforma (`next build`), sem
-customização.** `prisma generate` roda sozinho via `postinstall` do
-`package.json` — dispara a cada `pnpm install` (inclusive o da Vercel antes do
-build), sem precisar aparecer no Build Command. `prisma generate` é seguro e
-barato de rodar sempre: só lê `schema.prisma`, nunca toca o banco (por isso é
-o único comando do Prisma CLI isento do guard `APP_ENV`, ver D49).
+### Build Command da Vercel
+**Continua o padrão da plataforma, sem customização no painel.** Sem Build
+Command sobrescrito, a Vercel executa o script `build` do `package.json`, e
+tanto pnpm quanto npm disparam o `prebuild` antes dele. Toda a lógica fica
+versionada no repositório — nada depende de configuração do painel, que não
+aparece em code review nem em histórico de Git.
+
+A cadeia efetiva em Production é:
+
+```
+pnpm install                      → postinstall: prisma generate
+pnpm build
+  └─ prebuild                     → node scripts/vercelProductionMigrate.mjs
+                                     (migrations, só se VERCEL_ENV=production)
+                                  → prisma generate
+  └─ build                        → next build
+```
+
+`prisma generate` aparece **duas vezes de propósito**: o `postinstall` é
+pulado pelo pnpm sempre que o `node_modules` já satisfaz o lockfile (cache de
+build restaurado), e nesse caso `src/generated/prisma` — que é gitignorado e
+não faz parte do cache — nunca seria criado. O `prebuild` fecha esse buraco.
+Rodar duas vezes custa ~60 ms e é idempotente: `generate` só lê
+`schema.prisma`, nunca toca o banco (por isso é o único comando do Prisma CLI
+isento do guard `APP_ENV`, ver D49).
+
+**Não use um script `vercel-build`.** Ele teria precedência sobre `build`, e
+o hook correspondente passaria a ser `prevercel-build` — o `prebuild` deixaria
+de rodar silenciosamente, levando junto a migration e o `generate`.
 
 ## 7. Testes de upload — tamanhos de arquivo
 
