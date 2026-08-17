@@ -102,6 +102,33 @@ Nenhuma delas foi corrigida no momento desta análise. As lacunas **1 e 3**
 foram corrigidas em seguida, ainda em 2026-08-06 — ver seção 9. As demais
 continuam abertas.
 
+### Atualização 2026-08-17 — cobrança duplicada no cartão
+
+A lacuna 1 tratava só de **regressão de status** (o cartão devolvia a `PENDING`
+um pedido que o webhook já aprovara). Uma auditoria posterior encontrou um
+defeito **distinto e mais grave** no mesmo caminho, que aquela correção não
+alcançava: `createCardPaymentAttempt` não tinha reserva atômica e o provider
+gerava `randomUUID()` a cada chamada, então duas requisições concorrentes
+criavam **duas cobranças reais** — e `recordPaymentAttempt` guardava só o
+último `providerPaymentId`, deixando a outra órfã e não reconciliável (o
+webhook dela virava `stale_attempt`).
+
+As correções de Pix (`38b0506`, `d1b9c9f`) nunca cobriram isso: o próprio
+`d1b9c9f` registra que o cartão ficou de fora por exigir auditoria própria.
+
+Corrigido com um ciclo de tentativa específico do cartão — reserva atômica em
+`cardClaimedAt`, chave persistida em `cardIdempotencyKey` e vinculada ao
+token por `cardTokenFingerprint`, com rotação da chave quando a tentativa é
+legitimamente nova. Ver **seção 6.1 do runbook** para a tabela de desfechos, e
+`src/server/cardAttempt.integration.test.ts` para os 10 testes que fixam o
+comportamento (8 deles falham se a reserva for removida — verificado por
+mutação).
+
+Segue **aberto**: o fluxo de cartão nunca foi exercitado ponta a ponta contra
+o Mercado Pago real (nem sandbox), e as credenciais de Preview hoje são as
+mesmas de Production (`preview` e `production` no mesmo registro) — separá-las
+é pré-requisito para qualquer teste de cartão que não use dinheiro real.
+
 ## 7. Bloqueio real da fase (inalterado desde 2026-07-29)
 
 Continua sendo o **checkpoint humano de credenciais**: conta e aplicação no

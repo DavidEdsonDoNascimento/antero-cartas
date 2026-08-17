@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/server/errors";
 import { getPlan } from "@/config/plans";
@@ -14,6 +14,7 @@ import {
   type PixPaymentData,
 } from "@/server/payment";
 import { mapMercadoPagoStatus, shouldApplyTransition } from "@/server/payment/mercadoPagoStatus";
+import { MercadoPagoRequestRejectedError } from "@/server/payment/mercadopago";
 import { getEmailProvider } from "@/server/email";
 import { generateQrDataUrl } from "@/server/qrcode";
 import { verifyEditToken } from "@/lib/editToken";
@@ -161,6 +162,25 @@ function isRetryable(status: string): boolean {
 const PIX_CLAIM_STALE_MS = 30_000;
 
 /**
+ * Encerramento de uma tentativa de cartão que o provedor já resolveu.
+ * `expectedKey` é a chave com que ESTA tentativa reivindicou: ela entra no
+ * `where` como compare-and-swap para que uma tentativa superada nunca
+ * sobrescreva o `providerPaymentId` de outra.
+ */
+interface CardAttemptResolution {
+  expectedKey: string;
+  /**
+   * Só `PENDING` ou `FAILED`. Uma recusa é definitiva e o provedor já a
+   * informou de forma síncrona, então registrá-la aqui é o que devolve o
+   * pedido ao comprador para tentar outro cartão. Aprovação **nunca** é
+   * aplicada aqui: quem publica a carta é o webhook (task 013, seção 9), e
+   * marcar PAID neste ponto faria `shouldApplyTransition` descartar o webhook
+   * depois — a carta nunca seria publicada.
+   */
+  resolvedStatus: "PENDING" | "FAILED";
+}
+
+/**
  * Registra a tentativa de pagamento no pedido sem nunca regredir um estado já
  * resolvido.
  *
@@ -181,6 +201,7 @@ async function recordPaymentAttempt(
   providerName: string,
   providerPaymentId: string,
   pix?: PixPaymentData,
+  card?: CardAttemptResolution,
 ): Promise<void> {
   const attempt = {
     paymentMethod,
@@ -200,17 +221,43 @@ async function recordPaymentAttempt(
           pixIdempotencyKey: null,
         }
       : {}),
+    ...(card
+      ? {
+          // Tentativa de cartão resolvida: libera a reserva e descarta a
+          // chave junto com a impressão do token. A próxima tentativa é uma
+          // operação nova (outro cartão, outro token) e precisa de chave nova.
+          cardClaimedAt: null,
+          cardIdempotencyKey: null,
+          cardTokenFingerprint: null,
+        }
+      : {}),
   };
 
+  // CAS da tentativa de cartão: se outra tentativa já rotacionou a chave,
+  // esta aqui está superada e não pode escrever nada.
+  const cardGuard = card ? { cardIdempotencyKey: card.expectedKey } : {};
+
   const claimed = await prisma.order.updateMany({
-    where: { id: orderId, status: { in: [...RETRYABLE_STATUSES] } },
-    data: { ...attempt, status: "PENDING" },
+    where: { id: orderId, status: { in: [...RETRYABLE_STATUSES] }, ...cardGuard },
+    data: { ...attempt, status: card?.resolvedStatus ?? "PENDING" },
   });
   if (claimed.count > 0) return;
 
-  await prisma.order.updateMany({
-    where: { id: orderId, providerPaymentId: null },
+  const recorded = await prisma.order.updateMany({
+    where: { id: orderId, providerPaymentId: null, ...cardGuard },
     data: attempt,
+  });
+  if (recorded.count > 0 || !card) return;
+
+  // Nenhuma das duas escritas pegou uma tentativa de cartão: ou o webhook já
+  // resolveu o pedido com OUTRA cobrança, ou a chave rotacionou. Recusar a
+  // sobrescrita é o comportamento correto, mas a cobrança que acabamos de
+  // criar não pode sumir — o log é o que permite reconciliá-la (o
+  // `PaymentEvent` do webhook dela também guarda o mesmo id).
+  console.error("[pagamento] cobrança de cartão criada sem vínculo com o pedido", {
+    orderId,
+    providerPaymentId,
+    motivo: "tentativa superada por outra (compare-and-swap da chave falhou)",
   });
 }
 
@@ -401,6 +448,105 @@ export interface CardAttemptInput {
   issuerId?: string;
 }
 
+/**
+ * Janela em que uma reserva de cobrança de cartão é considerada "em
+ * andamento". Mais generosa que a do Pix (30 s) de propósito: no cartão a
+ * reserva também cobre a janela ambígua depois de uma falha, e precisa durar
+ * o bastante para o webhook do Mercado Pago chegar e resolver o pedido antes
+ * de o comprador conseguir cobrar num cartão diferente. Curta o bastante para
+ * não prender ninguém caso a cobrança nunca tenha sido criada.
+ */
+const CARD_CLAIM_STALE_MS = 90_000;
+
+/**
+ * Impressão do token do cartão. Nunca guardamos o token (ele vale uma vez, é
+ * dado de pagamento e não tem por que existir no nosso banco) — só um SHA-256
+ * dele, que responde à única pergunta que o serviço precisa fazer: "esta
+ * requisição é a mesma tentativa de novo, ou uma tentativa nova?".
+ */
+function cardTokenFingerprint(cardToken: string): string {
+  return createHash("sha256").update(cardToken).digest("hex");
+}
+
+/**
+ * Reivindica atomicamente o direito de criar UMA cobrança de cartão para o
+ * pedido, devolvendo a chave de idempotência a usar.
+ *
+ * O ciclo do cartão não é o do Pix. No Pix a cobrança é uma só e pode ser
+ * reapresentada indefinidamente com a mesma chave. No cartão, uma recusa é um
+ * desfecho legítimo e o comprador tem o direito de tentar outro cartão — o
+ * que é uma operação DIFERENTE, com token diferente, e que exige chave nova.
+ * Por isso a chave aqui pertence à tentativa (identificada pela impressão do
+ * token), não ao pedido.
+ *
+ * As três recusas possíveis, todas 409:
+ * - pedido já concluído (PAID/REFUNDED/CHARGED_BACK);
+ * - já existe cobrança de cartão viva aguardando confirmação;
+ * - já existe uma tentativa em andamento (reserva ainda válida).
+ */
+async function claimCardAttempt(orderId: string, cardToken: string): Promise<string> {
+  const fingerprint = cardTokenFingerprint(cardToken);
+  const emAndamento = new ApiError(
+    "conflict",
+    "Já existe uma tentativa de pagamento com cartão em andamento para este pedido. " +
+      "Aguarde a confirmação antes de tentar de novo.",
+  );
+
+  // Duas voltas, mesmo motivo do Pix: ler e reivindicar são duas instruções,
+  // e o compare-and-swap na chave detecta outra tentativa que tenha entrado
+  // no meio — nunca sobrescrevemos a chave de uma operação cujo resultado
+  // ainda não conhecemos.
+  for (let round = 0; round < 2; round++) {
+    const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+
+    if (!isRetryable(before.status)) {
+      throw new ApiError(
+        "forbidden_state",
+        "Este pedido já foi concluído e não pode ser pago novamente.",
+      );
+    }
+
+    // Cobrança de cartão já registrada e ainda não resolvida: o dinheiro pode
+    // estar a caminho. Uma segunda cobrança aqui é exatamente o defeito que
+    // esta reserva existe para impedir.
+    if (before.paymentMethod === "CARD" && before.providerPaymentId && before.status === "PENDING") {
+      throw new ApiError(
+        "conflict",
+        "Já existe um pagamento com cartão em processamento para este pedido. " +
+          "Aguarde a confirmação — não é preciso pagar de novo.",
+      );
+    }
+
+    const now = new Date();
+    const staleBefore = new Date(now.getTime() - CARD_CLAIM_STALE_MS);
+    if (before.cardClaimedAt && before.cardClaimedAt >= staleBefore) throw emAndamento;
+
+    // Mesmo token ⇒ mesma operação reapresentada ⇒ mesma chave (o provedor
+    // devolve a cobrança original em vez de criar outra). Token diferente ⇒
+    // tentativa nova ⇒ chave nova.
+    const mesmaTentativa = before.cardIdempotencyKey !== null && before.cardTokenFingerprint === fingerprint;
+    const idempotencyKey = mesmaTentativa ? before.cardIdempotencyKey! : randomUUID();
+
+    const claimed = await prisma.order.updateMany({
+      where: {
+        id: orderId,
+        status: { in: [...RETRYABLE_STATUSES] },
+        providerPaymentId: before.providerPaymentId,
+        cardIdempotencyKey: before.cardIdempotencyKey,
+        OR: [{ cardClaimedAt: null }, { cardClaimedAt: { lt: staleBefore } }],
+      },
+      data: {
+        cardClaimedAt: now,
+        cardIdempotencyKey: idempotencyKey,
+        cardTokenFingerprint: fingerprint,
+      },
+    });
+    if (claimed.count > 0) return idempotencyKey;
+  }
+
+  throw emAndamento;
+}
+
 export interface CardAttemptResult {
   order: OrderSummary;
   /**
@@ -424,28 +570,57 @@ export async function createCardPaymentAttempt(
   card: CardAttemptInput,
 ): Promise<CardAttemptResult> {
   const order = await loadRetryableOrder(orderId, token);
+  const idempotencyKey = await claimCardAttempt(order.id, card.token);
+
   const provider = getPaymentProvider();
+  try {
+    const result = await provider.createPayment({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      method: "CARD",
+      payer: {
+        name: order.customerName,
+        email: order.customerEmail,
+        document: order.customerDocument ?? undefined,
+      },
+      card,
+      idempotencyKey,
+    });
 
-  const result = await provider.createPayment({
-    orderId: order.id,
-    amount: order.amount,
-    currency: order.currency,
-    method: "CARD",
-    payer: {
-      name: order.customerName,
-      email: order.customerEmail,
-      document: order.customerDocument ?? undefined,
-    },
-    card,
-  });
+    // Aprovação NUNCA é aplicada aqui — só o webhook publica a carta. Recusa
+    // é aplicada porque o provedor já a resolveu de forma definitiva e sem
+    // isso o comprador ficaria preso atrás da guarda de cobrança viva.
+    await recordPaymentAttempt(order.id, "CARD", provider.name, result.providerPaymentId, undefined, {
+      expectedKey: idempotencyKey,
+      resolvedStatus: result.status === "failed" ? "FAILED" : "PENDING",
+    });
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
 
-  // Status fica PENDING independentemente da resposta síncrona do provedor —
-  // só o webhook decide o estado real do pedido (inclusive quando ele chega
-  // durante esta chamada; ver recordPaymentAttempt).
-  await recordPaymentAttempt(order.id, "CARD", provider.name, result.providerPaymentId);
-  const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    return { order: toSummary(updated), status: result.status, statusDetail: result.statusDetail };
+  } catch (err) {
+    if (err instanceof MercadoPagoRequestRejectedError) {
+      // 4xx: o Mercado Pago recusou a requisição e não criou cobrança
+      // nenhuma. Liberar tudo devolve o pedido ao comprador na hora, para
+      // corrigir o cartão — segurar seria prejudicá-lo sem ganho de segurança.
+      await prisma.order.updateMany({
+        where: { id: order.id, cardIdempotencyKey: idempotencyKey },
+        data: { cardClaimedAt: null, cardIdempotencyKey: null, cardTokenFingerprint: null },
+      });
+      throw err;
+    }
 
-  return { order: toSummary(updated), status: result.status, statusDetail: result.statusDetail };
+    // Falha AMBÍGUA (timeout, conexão perdida, 5xx, processo morto): o
+    // Mercado Pago pode ter criado a cobrança. Aqui está a diferença
+    // deliberada em relação ao Pix, que libera a reserva no catch: no Pix
+    // reapresentar a mesma chave recupera a MESMA cobrança, então liberar é
+    // inofensivo. No cartão o navegador gera um token novo a cada submissão,
+    // então a próxima tentativa seria uma operação diferente — e cobraria de
+    // novo. Manter a reserva viva é o que segura essa janela até o webhook
+    // resolver o pedido; passado CARD_CLAIM_STALE_MS ela expira sozinha para
+    // não prender o comprador para sempre.
+    throw err;
+  }
 }
 
 export async function getOrderStatus(orderId: string): Promise<OrderSummary> {

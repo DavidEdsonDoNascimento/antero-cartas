@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   CreatePaymentInput,
   CreatePaymentResult,
@@ -64,6 +63,26 @@ interface MpErrorResponse {
   cause?: Array<{ code?: string; description?: string }>;
 }
 
+/**
+ * O Mercado Pago respondeu recusando a própria requisição (4xx): requisição
+ * malformada, token do cartão inválido/expirado, credencial recusada, limite
+ * de taxa. **Nenhum pagamento foi criado** — a resposta é determinística.
+ *
+ * A distinção importa no caminho do dinheiro: uma falha ambígua (timeout,
+ * conexão perdida, 5xx) pode ter criado a cobrança, e por isso obriga a
+ * preservar a reserva e a chave de idempotência. Uma recusa 4xx não criou
+ * nada, então segurar o pedido seria só prejudicar o comprador, que precisa
+ * poder corrigir o cartão e tentar de novo na hora.
+ */
+export class MercadoPagoRequestRejectedError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "MercadoPagoRequestRejectedError";
+    this.status = status;
+  }
+}
+
 function splitName(fullName: string): { first: string; last: string } {
   const parts = fullName.trim().split(/\s+/);
   return { first: parts[0] ?? fullName, last: parts.slice(1).join(" ") || parts[0] || fullName };
@@ -96,7 +115,14 @@ async function callMercadoPago(
   const data = (await res.json().catch(() => ({}))) as MpPaymentResponse & MpErrorResponse;
   if (!res.ok) {
     const reason = data.message ?? data.cause?.[0]?.description ?? `HTTP ${res.status}`;
-    throw new Error(`Mercado Pago recusou a requisição: ${reason}`);
+    const message = `Mercado Pago recusou a requisição: ${reason}`;
+    // 4xx: o provedor rejeitou a requisição e não criou pagamento nenhum.
+    // 5xx e falha de rede (que nem chegam aqui, o `fetch` lança) continuam
+    // ambíguos e viram Error comum — ver MercadoPagoRequestRejectedError.
+    if (res.status >= 400 && res.status < 500) {
+      throw new MercadoPagoRequestRejectedError(message, res.status);
+    }
+    throw new Error(message);
   }
   return data;
 }
@@ -160,13 +186,17 @@ export function createMercadoPagoProvider(options: MercadoPagoOptions = {}): Pay
 
       if (input.method === "CARD") {
         if (!input.card) throw new Error("Dados do cartão ausentes.");
-        // Cartão ainda gera a chave por chamada — mesma limitação que o Pix
-        // tinha. Deliberadamente fora do escopo desta correção (incidente de
-        // Pix); depende de uma auditoria própria, porque o token do cartão só
-        // vale uma vez e o ciclo de retentativa é diferente.
+        // Mesma regra do Pix: a chave é decidida e persistida pelo serviço
+        // ANTES desta chamada. Gerar uma aqui dentro era o bug — uma chave
+        // nova por chamada não protege nada. No cartão a chave é da
+        // TENTATIVA (vinculada ao token), não do pedido: uma recusa é
+        // desfecho legítimo e a próxima tentativa nasce com chave nova.
+        if (!input.idempotencyKey) {
+          throw new Error("Criação de pagamento com cartão exige idempotencyKey persistida pelo serviço.");
+        }
         const data = await callMercadoPago(cfg, "/v1/payments", {
           method: "POST",
-          headers: { "X-Idempotency-Key": randomUUID() },
+          headers: { "X-Idempotency-Key": input.idempotencyKey },
           body: JSON.stringify({
             ...common,
             token: input.card.token,

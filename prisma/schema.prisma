@@ -151,6 +151,26 @@ model Order {
   /// tentativa anterior foi resolvida de forma definitiva.
   pixIdempotencyKey String?
 
+  /// Reserva atômica de uma criação de cobrança de cartão em andamento —
+  /// mesmo primitivo de `pixClaimedAt`, com um ciclo de vida diferente:
+  /// no cartão a reserva NÃO é liberada numa falha ambígua. Enquanto ela
+  /// estiver viva, uma segunda requisição é recusada com 409 em vez de
+  /// arriscar uma segunda cobrança real; passado CARD_CLAIM_STALE_MS a
+  /// tentativa é considerada abandonada e o pedido volta a aceitar cartão.
+  cardClaimedAt DateTime?
+  /// X-Idempotency-Key enviada ao Mercado Pago na criação do pagamento de
+  /// cartão. Gravada ANTES da chamada. Diferente do Pix, ela NÃO é uma chave
+  /// permanente do pedido: uma recusa é um desfecho legítimo e o comprador
+  /// pode tentar outro cartão, o que é uma operação nova e exige chave nova.
+  cardIdempotencyKey String?
+  /// SHA-256 do token do cartão da tentativa — nunca o token em si, que
+  /// continua existindo só no navegador e na chamada ao provedor. Serve
+  /// exclusivamente para decidir se uma requisição é a MESMA tentativa
+  /// reapresentada (mesmo token ⇒ reusa a chave) ou uma tentativa nova
+  /// (token diferente ⇒ chave nova). Valor derivado e de mão única: não
+  /// reconstrói o token nem serve para cobrar.
+  cardTokenFingerprint String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

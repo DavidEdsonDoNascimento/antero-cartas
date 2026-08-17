@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { createMercadoPagoProvider, fetchMercadoPagoPayment } from "./mercadopago";
+import {
+  createMercadoPagoProvider,
+  fetchMercadoPagoPayment,
+  MercadoPagoRequestRejectedError,
+} from "./mercadopago";
 
 const OPTS = { accessToken: "TEST-token", siteUrl: "https://cartas.anterosistemas.com.br" };
 
@@ -158,6 +162,7 @@ describe("createMercadoPagoProvider — cartão", () => {
       method: "CARD",
       card: { token: "card-token-abc", installments: 1, paymentMethodId: "visa", issuerId: "25" },
       payer: { name: "Bruno Comprador", email: "bruno@example.com", document: "12345678909" },
+      idempotencyKey: "chave-cartao-1",
     });
 
     expect(result.providerPaymentId).toBe("987");
@@ -188,6 +193,7 @@ describe("createMercadoPagoProvider — cartão", () => {
       currency: "BRL",
       method: "CARD",
       card: { token: "t", installments: 1, paymentMethodId: "visa" },
+      idempotencyKey: "chave-cartao-2",
     });
     expect(result.status).toBe("failed");
     expect(result.statusDetail).toBe("cc_rejected_insufficient_amount");
@@ -198,6 +204,55 @@ describe("createMercadoPagoProvider — cartão", () => {
     await expect(
       provider.createPayment({ orderId: "o3", amount: 1000, currency: "BRL", method: "CARD" }),
     ).rejects.toThrow(/Dados do cartão ausentes/);
+  });
+
+  it("recusa criar pagamento de cartão sem a chave de idempotência do serviço", async () => {
+    // Fail-closed: gerar a chave aqui dentro era exatamente o bug corrigido.
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: stubFetch().impl });
+    await expect(
+      provider.createPayment({
+        orderId: "o4",
+        amount: 1000,
+        currency: "BRL",
+        method: "CARD",
+        card: { token: "t", installments: 1, paymentMethodId: "visa" },
+      }),
+    ).rejects.toThrow(/idempotencyKey/);
+  });
+
+  it("envia como X-Idempotency-Key exatamente a chave recebida do serviço", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(201, { id: 1, status: "approved" }));
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+    await provider.createPayment({
+      orderId: "o5",
+      amount: 1000,
+      currency: "BRL",
+      method: "CARD",
+      card: { token: "tok", installments: 1, paymentMethodId: "visa" },
+      idempotencyKey: "chave-do-servico",
+    });
+    const headers = calls[0].init.headers as Record<string, string>;
+    expect(headers["X-Idempotency-Key"]).toBe("chave-do-servico");
+  });
+
+  it("duas apresentações da mesma tentativa mandam a mesma chave e o mesmo corpo", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(201, { id: 1, status: "approved" }));
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+    const input = {
+      orderId: "o6",
+      amount: 1000,
+      currency: "BRL",
+      method: "CARD" as const,
+      card: { token: "tok-estavel", installments: 1, paymentMethodId: "visa" },
+      idempotencyKey: "chave-estavel",
+    };
+    await provider.createPayment(input);
+    await provider.createPayment(input);
+
+    const h0 = calls[0].init.headers as Record<string, string>;
+    const h1 = calls[1].init.headers as Record<string, string>;
+    expect(h1["X-Idempotency-Key"]).toBe(h0["X-Idempotency-Key"]);
+    expect(calls[1].init.body).toBe(calls[0].init.body);
   });
 });
 
@@ -216,6 +271,35 @@ describe("createMercadoPagoProvider — erros do provedor", () => {
         idempotencyKey: "key-erro",
       }),
     ).rejects.toThrow(/invalid transaction_amount/);
+  });
+
+  it("4xx vira MercadoPagoRequestRejectedError — recusa determinística, nada foi criado", async () => {
+    const { impl } = stubFetch(jsonResponse(400, { message: "invalid card_token_id" }));
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+    const promessa = provider.createPayment({
+      orderId: "o1",
+      amount: 1000,
+      currency: "BRL",
+      method: "CARD",
+      card: { token: "tok-ruim", installments: 1, paymentMethodId: "visa" },
+      idempotencyKey: "k",
+    });
+    await expect(promessa).rejects.toBeInstanceOf(MercadoPagoRequestRejectedError);
+  });
+
+  it("5xx continua erro comum — desfecho AMBÍGUO, a cobrança pode ter sido criada", async () => {
+    const { impl } = stubFetch(jsonResponse(502, { message: "bad gateway" }));
+    const provider = createMercadoPagoProvider({ ...OPTS, fetchImpl: impl });
+    const promessa = provider.createPayment({
+      orderId: "o1",
+      amount: 1000,
+      currency: "BRL",
+      method: "CARD",
+      card: { token: "tok", installments: 1, paymentMethodId: "visa" },
+      idempotencyKey: "k",
+    });
+    await expect(promessa).rejects.toThrow(/bad gateway/);
+    await expect(promessa).rejects.not.toBeInstanceOf(MercadoPagoRequestRejectedError);
   });
 });
 

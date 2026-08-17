@@ -322,6 +322,53 @@ isento do guard `APP_ENV`, ver D49).
 o hook correspondente passaria a ser `prevercel-build` — o `prebuild` deixaria
 de rodar silenciosamente, levando junto a migration e o `generate`.
 
+## 6.1. Ciclo de uma tentativa de pagamento com cartão
+
+Pix e cartão **não** compartilham o ciclo de tentativa, e a diferença é
+deliberada. No Pix a cobrança é uma só: reapresentar a mesma chave devolve o
+mesmo QR Code, para sempre. No cartão, uma recusa é um desfecho legítimo e o
+comprador tem o direito de tentar outro cartão — que é uma operação
+diferente, com token diferente, e exige chave nova. Uma chave permanente por
+pedido impediria a segunda tentativa; nenhuma chave permite cobrança dupla.
+
+Por isso a chave de idempotência do cartão pertence à **tentativa**,
+identificada pela impressão (SHA-256) do token do cartão.
+
+Colunas de controle em `Order` (migration
+`20260817000857_phase3_card_attempt_claim`, aditiva):
+
+| Coluna | Papel |
+|---|---|
+| `cardClaimedAt` | reserva atômica da tentativa; expira em `CARD_CLAIM_STALE_MS` (90 s) |
+| `cardIdempotencyKey` | `X-Idempotency-Key` enviada ao Mercado Pago, gravada **antes** da chamada |
+| `cardTokenFingerprint` | SHA-256 do token — nunca o token; só distingue "mesma tentativa" de "tentativa nova" |
+
+Desfechos, todos em `claimCardAttempt`/`createCardPaymentAttempt`
+(`src/server/orderService.ts`):
+
+| Situação | O que acontece |
+|---|---|
+| Nenhuma tentativa em aberto | reserva + chave nova |
+| Mesmo token reapresentado | reusa a MESMA chave (o provedor devolve a cobrança original) |
+| Segunda chamada com reserva viva | **409** — provedor não é chamado |
+| Cobrança já registrada e pedido `PENDING` | **409** — "aguarde a confirmação, não é preciso pagar de novo" |
+| Recusa do cartão (`rejected`) | pedido vai a `FAILED`, reserva e chave descartadas → nova tentativa liberada |
+| Recusa **determinística** do MP (4xx) | nada foi criado: libera tudo na hora para o comprador corrigir o cartão |
+| Falha **ambígua** (timeout, 5xx, rede) | reserva e chave **preservadas** — é a diferença central em relação ao Pix |
+| Aprovação | **nunca** aplicada aqui; quem marca `PAID` e publica é o webhook |
+
+O ponto mais sutil é a falha ambígua. No Pix a reserva é liberada no `catch`,
+porque reapresentar recupera a mesma cobrança. No cartão isso seria perigoso:
+o navegador gera um token novo a cada submissão, então a tentativa seguinte
+seria outra operação e cobraria de novo. A reserva fica viva justamente para
+segurar essa janela até o webhook resolver o pedido, e expira sozinha em 90 s
+para nunca prender o comprador de forma permanente.
+
+**Aprovação nunca é gravada de forma síncrona**, mesmo quando o Mercado Pago
+responde `approved` na hora. Marcar `PAID` aqui faria `shouldApplyTransition`
+descartar o webhook depois (`current === next`), e a carta nunca seria
+publicada.
+
 ## 7. Testes de upload — tamanhos de arquivo
 
 Testado localmente (servidor Next local + Supabase Storage local),

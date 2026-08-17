@@ -67,6 +67,8 @@ type State =
   | { step: "ready" }
   | { step: "submitting" }
   | { step: "rejected"; message: string }
+  /** Cobrança já em andamento (409): esperar é a ação certa, não reenviar. */
+  | { step: "pending"; message: string }
   | { step: "error"; message: string };
 
 export function CardPaymentPanel({
@@ -129,8 +131,14 @@ export function CardPaymentPanel({
                       resolve();
                       return;
                     }
+                    // 409 = já existe uma tentativa/cobrança em andamento para
+                    // este pedido. A mensagem do servidor pede para AGUARDAR,
+                    // nunca para tentar de novo: reenviar é justamente o que
+                    // arriscaria uma segunda cobrança, e o estado é resolvido
+                    // pelo webhook em segundos.
+                    const emAndamento = err instanceof ApiClientError && err.code === "conflict";
                     setState({
-                      step: "error",
+                      step: emAndamento ? "pending" : "error",
                       message:
                         err instanceof ApiClientError
                           ? err.message
@@ -177,6 +185,9 @@ export function CardPaymentPanel({
       )}
       {(state.step === "rejected" || state.step === "error") && (
         <p className="mt-4 text-center text-sm text-vinho">{state.message}</p>
+      )}
+      {state.step === "pending" && (
+        <p className="mt-4 text-center text-sm text-grafite/70">{state.message}</p>
       )}
       <div id={BRICK_CONTAINER_ID} className="mt-4" />
     </div>
