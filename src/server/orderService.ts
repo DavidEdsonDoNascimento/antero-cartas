@@ -412,10 +412,21 @@ async function recordPaymentAttempt(
   if (recorded.count > 0 || !(pix || card)) return;
 
   // Nenhuma das duas escritas pegou a tentativa: ou o webhook já resolveu o
-  // pedido com OUTRA cobrança, ou a chave rotacionou. Recusar a sobrescrita é
-  // o comportamento correto, mas a cobrança que acabamos de criar não pode
-  // sumir — o log é o que permite reconciliá-la (o `PaymentEvent` do webhook
-  // dela também guarda o mesmo id).
+  // pedido com OUTRA cobrança, ou a chave rotacionou. Relê antes de soar o
+  // alerta — o webhook pode ter vinculado atomicamente exatamente ESTE
+  // `providerPaymentId` enquanto esta chamada ainda estava em voo (a
+  // notificação chega quase junto com a resposta, ou a chamada original
+  // demora e o webhook chega primeiro; ver `resolveWebhookOutcome`, CAS de
+  // vínculo). Nesse caso o pedido já está corretamente ligado à cobrança
+  // que acabamos de criar — é sucesso idempotente, não um vínculo perdido,
+  // e reportar como erro seria um falso alerta operacional.
+  const current = await prisma.order.findUnique({ where: { id: orderId } });
+  if (current?.providerPaymentId === providerPaymentId) return;
+
+  // Continua nulo ou é um id DIFERENTE: agora sim a cobrança que acabamos de
+  // criar não tem vínculo nenhum com o pedido, e não pode sumir — o log é o
+  // que permite reconciliá-la (o `PaymentEvent` do webhook dela também
+  // guarda o mesmo id).
   console.error("[pagamento] cobrança criada sem vínculo com o pedido", {
     orderId,
     providerPaymentId,
