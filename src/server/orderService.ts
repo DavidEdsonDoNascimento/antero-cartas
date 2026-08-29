@@ -203,53 +203,61 @@ const CARD_CLAIM_STALE_MS = 90_000;
  *   pode pagar (Pix com QR não vencido) ou que já foi criada no provedor e
  *   aguarda o webhook (cartão com `providerPaymentId`, ainda `PENDING`).
  * - AMBÍGUO OU EM ANDAMENTO: a chamada ao provedor pode ter criado uma
- *   cobrança sem que ainda saibamos (reserva viva agora mesmo, ou chave
- *   persistida sem QR/resultado confirmado). Bloquear aqui também é
+ *   cobrança sem que ainda saibamos (reserva em voo agora mesmo, ou chave
+ *   persistida sem resultado confirmado). Bloquear aqui também é
  *   obrigatório — permitir o outro método nesta janela arrisca cobrar duas
  *   vezes pelo mesmo pedido.
  *
  * Nenhuma das duas checa `paymentMethod` para a parte "ambíguo/em
- * andamento": `pixClaimedAt`/`pixIdempotencyKey` e `cardClaimedAt` só são
- * escritos pelo próprio fluxo daquele método, nunca pelo do outro — a mera
- * presença já basta como sinal, porque `paymentMethod` ainda pode apontar
- * para a ÚLTIMA tentativa RESOLVIDA (de qualquer um dos dois métodos)
- * enquanto a reivindicação atual está em voo. `paymentMethod` só entra na
- * parte "confirmado e pagável", que depende de qual foi essa última
- * tentativa resolvida.
+ * andamento": `pixClaimedAt`/`pixIdempotencyKey` e `cardIdempotencyKey` só
+ * são escritos pelo próprio fluxo daquele método, nunca pelo do outro — a
+ * mera presença já basta como sinal, porque `paymentMethod` ainda pode
+ * apontar para a ÚLTIMA tentativa RESOLVIDA (de qualquer um dos dois
+ * métodos) enquanto a reivindicação atual está em voo. `paymentMethod` só
+ * entra na parte "confirmado e pagável", que depende de qual foi essa
+ * última tentativa resolvida.
+ *
+ * `isCardBusy` do lado do cartão **não depende de `CARD_CLAIM_STALE_MS`**
+ * (correção de uma janela residual de cobrança dupla, achada em auditoria
+ * pós-implementação): o TTL existe só para decidir quando esta MESMA
+ * tentativa (mesmo token) pode ser reapresentada com a MESMA chave — ele
+ * nunca significou que uma cobrança ambígua deixou de existir no provedor.
+ * `cardIdempotencyKey` só é `null` quando a tentativa foi de fato resolvida
+ * (sucesso, recusa determinística ou 4xx — todos limpam a chave); enquanto
+ * ela seguir gravada, o desfecho continua desconhecido e o Pix continua
+ * bloqueado, não importa há quanto tempo. (A checagem "mesmo token, mesma
+ * chave" que PERMITE um retry depois do TTL vive em `claimCardAttempt`, não
+ * aqui — `isCardBusy` só decide se o OUTRO método pode passar, e a resposta
+ * para ele é sempre não enquanto a ambiguidade não for resolvida.)
  */
 function isCardBusy(
   order: {
     status: string;
     paymentMethod: string;
     providerPaymentId: string | null;
-    cardClaimedAt: Date | null;
+    cardIdempotencyKey: string | null;
   },
-  now: Date,
 ): boolean {
   if (order.status !== "PENDING") return false;
-  const staleBefore = new Date(now.getTime() - CARD_CLAIM_STALE_MS);
-  const reservaViva = order.cardClaimedAt !== null && order.cardClaimedAt >= staleBefore;
+  const ambiguoOuEmAndamento = order.cardIdempotencyKey !== null;
   const cobrancaConfirmadaAguardandoWebhook =
     order.paymentMethod === "CARD" && order.providerPaymentId !== null;
-  return reservaViva || cobrancaConfirmadaAguardandoWebhook;
+  return ambiguoOuEmAndamento || cobrancaConfirmadaAguardandoWebhook;
 }
 
 /**
  * Espelho de `isCardBusy` em `Prisma.OrderWhereInput` — ver comentário acima.
- *
- * `cardClaimedAt: { not: null }` antes do `gte` não é redundante: em SQL,
- * comparar uma coluna NULA com `>=` não dá `false`, dá `NULL` (lógica de três
- * valores) — e `NOT NULL` continua `NULL`, que o `WHERE` trata como "não
- * bate", não como "bate". Sem essa guarda, um pedido sem `cardClaimedAt`
- * (nenhuma tentativa de cartão nunca aconteceu) faria a linha inteira sumir
- * do `updateMany` de reivindicação do Pix, mesmo sem cartão ocupado nenhum.
+ * Sem comparação de tempo: as duas condições (`cardIdempotencyKey` gravada,
+ * ou cobrança confirmada aguardando webhook) já são sempre determinadas por
+ * "IS NOT NULL"/"IS NULL", nunca por `>=`/`<=` sobre coluna anulável — não
+ * há o risco de `NULL` de três valores que motivou o `not: null` explícito
+ * na versão anterior desta função (comparação de data já não existe mais).
  */
-function cardBusyWhere(now: Date): Prisma.OrderWhereInput {
-  const staleBefore = new Date(now.getTime() - CARD_CLAIM_STALE_MS);
+function cardBusyWhere(): Prisma.OrderWhereInput {
   return {
     status: "PENDING",
     OR: [
-      { AND: [{ cardClaimedAt: { not: null } }, { cardClaimedAt: { gte: staleBefore } }] },
+      { cardIdempotencyKey: { not: null } },
       { AND: [{ paymentMethod: "CARD" }, { providerPaymentId: { not: null } }] },
     ],
   };
@@ -510,7 +518,7 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
       );
     }
 
-    if (isCardBusy(before, now)) {
+    if (isCardBusy(before)) {
       throw new ApiError(
         "conflict",
         "Já existe uma tentativa de pagamento com cartão em andamento para este pedido. " +
@@ -546,7 +554,7 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
         // Exclusão mútua com o cartão: nenhuma reivindicação de Pix pode
         // vencer enquanto o cartão estiver ocupado (mesma condição de
         // `isCardBusy`, reavaliada de verdade após o lock da linha liberar).
-        NOT: cardBusyWhere(now),
+        NOT: cardBusyWhere(),
         AND: [
           // Só reivindica se não houver Pix ainda pagável para reaproveitar
           // (reaproveitamento cai no `if` acima) — um Pix VENCIDO também
@@ -679,10 +687,13 @@ function cardTokenFingerprint(cardToken: string): string {
  * Por isso a chave aqui pertence à tentativa (identificada pela impressão do
  * token), não ao pedido.
  *
- * As quatro recusas possíveis, todas 409:
+ * As cinco recusas possíveis, todas 409:
  * - pedido já concluído (PAID/REFUNDED/CHARGED_BACK, via `forbidden_state`);
  * - já existe cobrança de cartão viva aguardando confirmação;
- * - já existe uma tentativa em andamento (reserva ainda válida);
+ * - já existe uma tentativa em andamento (reserva ainda dentro do TTL);
+ * - já existe uma tentativa AMBÍGUA (chave gravada, provedor nunca
+ *   confirmou nada) e o token apresentado é DIFERENTE do que a reivindicou —
+ *   mesmo depois do TTL (ver comentário sobre `CARD_CLAIM_STALE_MS` abaixo);
  * - já existe um Pix ocupado (`isPixBusy`) — exclusão mútua entre os dois
  *   métodos, task 013 seção 8.
  */
@@ -728,12 +739,37 @@ async function claimCardAttempt(orderId: string, cardToken: string): Promise<str
     }
 
     const staleBefore = new Date(now.getTime() - CARD_CLAIM_STALE_MS);
+    // Dentro do TTL, bloqueia QUALQUER tentativa nova — mesmo token ou não.
+    // É só o "em andamento agora mesmo" (chamada real em voo, tempo real).
     if (before.cardClaimedAt && before.cardClaimedAt >= staleBefore) throw emAndamento;
 
     // Mesmo token ⇒ mesma operação reapresentada ⇒ mesma chave (o provedor
     // devolve a cobrança original em vez de criar outra). Token diferente ⇒
-    // tentativa nova ⇒ chave nova.
+    // tentativa nova ⇒ chave nova — MAS só quando a tentativa anterior já
+    // não é mais ambígua.
     const mesmaTentativa = before.cardIdempotencyKey !== null && before.cardTokenFingerprint === fingerprint;
+
+    // Fora do TTL, mas ainda AMBÍGUA (chave gravada, `providerPaymentId`
+    // nunca escrito por essa tentativa): o Mercado Pago pode ter criado a
+    // cobrança sem que a resposta tenha chegado — o TTL de
+    // `CARD_CLAIM_STALE_MS` só existe para permitir que a MESMA operação
+    // seja reapresentada com a MESMA chave depois de um tempo razoável
+    // (processo morto, função serverless reciclada); ele nunca significou
+    // que a cobrança deixou de existir no provedor. Um token DIFERENTE
+    // nunca pode superar essa ambiguidade: seria uma cobrança nova, e a
+    // antiga pode muito bem ter sido aprovada no meio tempo. A resolução
+    // definitiva (descobrir o que aconteceu de fato) é reconciliação com o
+    // Mercado Pago — fora do escopo desta correção; aqui só se garante que
+    // nada colide enquanto ela não acontece.
+    const ambiguaSemResolucao = before.cardIdempotencyKey !== null && before.providerPaymentId === null;
+    if (ambiguaSemResolucao && !mesmaTentativa) {
+      throw new ApiError(
+        "conflict",
+        "Já existe uma tentativa de pagamento com cartão sem confirmação para este pedido. " +
+          "Não é possível tentar com outro cartão até essa tentativa ser confirmada ou recusada.",
+      );
+    }
+
     const idempotencyKey = mesmaTentativa ? before.cardIdempotencyKey! : randomUUID();
 
     const claimed = await prisma.order.updateMany({
@@ -743,10 +779,22 @@ async function claimCardAttempt(orderId: string, cardToken: string): Promise<str
         providerPaymentId: before.providerPaymentId,
         cardIdempotencyKey: before.cardIdempotencyKey,
         OR: [{ cardClaimedAt: null }, { cardClaimedAt: { lt: staleBefore } }],
-        // Exclusão mútua com o Pix: nenhuma reivindicação de cartão pode
-        // vencer enquanto o Pix estiver ocupado (mesma condição de
-        // `isPixBusy`, reavaliada de verdade após o lock da linha liberar).
-        NOT: pixBusyWhere(now),
+        AND: [
+          // Exclusão mútua com o Pix: nenhuma reivindicação de cartão pode
+          // vencer enquanto o Pix estiver ocupado (mesma condição de
+          // `isPixBusy`, reavaliada de verdade após o lock da linha liberar).
+          { NOT: pixBusyWhere(now) },
+          // Espelho exato do `if (ambiguaSemResolucao && !mesmaTentativa)`
+          // acima, reavaliado contra a linha já travada — mesmo motivo de
+          // sempre: a checagem em memória sozinha não seria atômica contra
+          // uma segunda reivindicação que entre no meio. Omitida quando
+          // `mesmaTentativa` já é `true`: nesse caso a condição nunca
+          // bloquearia mesmo (o token bate), então incluí-la seria só
+          // trabalho a mais para o banco.
+          ...(mesmaTentativa
+            ? []
+            : [{ NOT: { AND: [{ cardIdempotencyKey: { not: null } }, { providerPaymentId: null }] } }]),
+        ],
       },
       data: {
         cardClaimedAt: now,

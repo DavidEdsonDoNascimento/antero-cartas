@@ -192,6 +192,54 @@ describe.skipIf(!RUN)("Fase 3 — tentativa de cartão (integração)", { timeou
     expect(calls[1]!.idempotencyKey).toBe(calls[0]!.idempotencyKey);
   });
 
+  it("token diferente nunca supera uma tentativa ambígua, mesmo depois do TTL", async () => {
+    // Correção de uma janela residual de cobrança dupla: o TTL de
+    // CARD_CLAIM_STALE_MS decide quando a MESMA tentativa pode ser
+    // reapresentada com a MESMA chave — ele nunca significou que a
+    // ambiguidade acabou. Um cartão DIFERENTE nunca pode furar essa reserva
+    // só porque o relógio passou; a resolução de verdade é reconciliação
+    // com o Mercado Pago (fora do escopo desta correção).
+    let falhar = true;
+    const { order, editToken, calls } = await setup("ambigua-token-diferente", async (_c, n) => {
+      if (falhar) {
+        falhar = false;
+        throw new Error("socket hang up"); // ambíguo: pode ter criado a cobrança
+      }
+      return { providerPaymentId: `mp_card_amb_td_${n}_${RUN_ID}`, status: "pending" as const };
+    });
+
+    await expect(
+      orderService.createCardPaymentAttempt(order.id, editToken, cartao("tok-original")),
+    ).rejects.toThrow(/socket hang up/);
+
+    const apos = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    const chaveOriginal = apos.cardIdempotencyKey;
+    const fingerprintOriginal = apos.cardTokenFingerprint;
+    expect(chaveOriginal).not.toBeNull();
+    expect(fingerprintOriginal).not.toBeNull();
+
+    // Envelhece a reserva para além do TTL — sozinho isso nunca deveria
+    // bastar para um cartão DIFERENTE furar a ambiguidade.
+    await prisma.order.updateMany({
+      where: { id: order.id },
+      data: { cardClaimedAt: new Date(Date.now() - 120_000) },
+    });
+
+    await expect(
+      orderService.createCardPaymentAttempt(order.id, editToken, cartao("tok-diferente")),
+    ).rejects.toMatchObject({ code: "conflict" });
+
+    // Nenhuma segunda chamada ao provedor: a tentativa ambígua original
+    // continua sendo a única, e nenhum pagamento novo foi criado com chave
+    // diferente.
+    expect(calls.length).toBe(1);
+
+    const final = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(final.cardIdempotencyKey).toBe(chaveOriginal);
+    expect(final.cardTokenFingerprint).toBe(fingerprintOriginal);
+    expect(final.providerPaymentId).toBeNull();
+  });
+
   it("recusa definitiva libera o pedido e a nova tentativa usa chave e token novos", async () => {
     const { order, editToken, calls } = await setup("recusa", async (_c, n) => ({
       providerPaymentId: `mp_card_rec_${n}_${RUN_ID}`,

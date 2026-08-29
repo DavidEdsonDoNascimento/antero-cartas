@@ -269,6 +269,62 @@ describe.skipIf(!RUN)(
       expect(calls.filter((c) => c.method === "CARD")).toHaveLength(0);
     });
 
+    it("cartão ambíguo ENVELHECIDO (além do TTL) continua bloqueando a criação de Pix", async () => {
+      // Correção de uma janela residual de cobrança dupla: o TTL de
+      // CARD_CLAIM_STALE_MS nunca significou que a cobrança deixou de
+      // existir no provedor — só que a MESMA tentativa pode ser
+      // reapresentada com a MESMA chave. Uma ambiguidade genuína (falha de
+      // rede real, não simulação de campos) precisa continuar bloqueando o
+      // Pix mesmo depois de 90s.
+      let falhou = false;
+      const { order, editToken, calls } = await setup(
+        "cartao-ambiguo-envelhecido-bloqueia-pix",
+        pixSucesso("pix-nao-deveria-ser-criado"),
+        async (_c, n) => {
+          if (!falhou) {
+            falhou = true;
+            throw new Error("socket hang up"); // ambíguo: pode ter criado a cobrança
+          }
+          return { providerPaymentId: `mp_nao_deveria_${n}_${RUN_ID}`, status: "pending" as const };
+        },
+      );
+
+      await expect(
+        orderService.createCardPaymentAttempt(order.id, editToken, cartao("tok-ambiguo")),
+      ).rejects.toThrow(/socket hang up/);
+
+      const apos = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(apos.cardClaimedAt).not.toBeNull();
+      expect(apos.cardIdempotencyKey).not.toBeNull();
+      expect(apos.cardTokenFingerprint).not.toBeNull();
+      expect(apos.providerPaymentId).toBeNull();
+
+      const chaveOriginal = apos.cardIdempotencyKey;
+      const fingerprintOriginal = apos.cardTokenFingerprint;
+
+      // Envelhece a reserva para além do TTL — a ambiguidade não desaparece
+      // com o tempo (é isso que esta correção fixa).
+      await prisma.order.updateMany({
+        where: { id: order.id },
+        data: { cardClaimedAt: new Date(Date.now() - 120_000) },
+      });
+
+      await expect(orderService.createPixPaymentAttempt(order.id, editToken)).rejects.toMatchObject({
+        code: "conflict",
+      });
+
+      // Nenhuma chamada Pix ao provedor; a única chamada continua sendo a
+      // original de cartão.
+      expect(calls.filter((c) => c.method === "PIX")).toHaveLength(0);
+      expect(calls.filter((c) => c.method === "CARD")).toHaveLength(1);
+
+      const final = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+      expect(final.cardIdempotencyKey).toBe(chaveOriginal);
+      expect(final.cardTokenFingerprint).toBe(fingerprintOriginal);
+      expect(final.providerPaymentId).toBeNull();
+      expect(final.status).toBe("PENDING");
+    });
+
     // --- 4. Corrida limpa: exatamente uma chamada total (+ 5: nada sobrescrito) --
 
     it(
