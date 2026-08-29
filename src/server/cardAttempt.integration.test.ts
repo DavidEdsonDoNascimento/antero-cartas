@@ -334,6 +334,10 @@ describe.skipIf(!RUN)("Fase 3 — tentativa de cartão (integração)", { timeou
         status: "approved",
         statusDetail: "accredited",
         type: "payment",
+        transactionAmount: 18.9,
+        currencyId: "BRL",
+        paymentMethodId: "visa",
+        paymentTypeId: "credit_card",
       });
       return { providerPaymentId, status: "paid" as const };
     });
@@ -371,6 +375,10 @@ describe.skipIf(!RUN)("Fase 3 — tentativa de cartão (integração)", { timeou
       status: "rejected",
       statusDetail: "cc_rejected_other_reason",
       type: "payment",
+      transactionAmount: 18.9,
+      currencyId: "BRL",
+      paymentMethodId: "visa",
+      paymentTypeId: "credit_card",
     });
 
     expect(outcome.kind).toBe("stale_attempt");

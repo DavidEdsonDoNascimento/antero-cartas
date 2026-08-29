@@ -14,8 +14,14 @@ import {
   type PaymentStatus,
   type PixPaymentData,
 } from "@/server/payment";
-import { mapMercadoPagoStatus, shouldApplyTransition } from "@/server/payment/mercadoPagoStatus";
+import {
+  mapMercadoPagoStatus,
+  mapMercadoPagoPaymentMethod,
+  shouldApplyTransition,
+  type MercadoPagoPaymentMethod,
+} from "@/server/payment/mercadoPagoStatus";
 import { MercadoPagoRequestRejectedError } from "@/server/payment/mercadopago";
+import { toCentsExact } from "@/server/payment/money";
 import { getEmailProvider } from "@/server/email";
 import { generateQrDataUrl } from "@/server/qrcode";
 import { verifyEditToken } from "@/lib/editToken";
@@ -1013,6 +1019,17 @@ export interface MercadoPagoWebhookInput {
   status: string;
   statusDetail: string | null;
   type: string;
+  /**
+   * Os quatro campos abaixo vêm de uma consulta direta à API do Mercado
+   * Pago (`fetchMercadoPagoPayment`), nunca do corpo da notificação em si —
+   * o corpo do webhook só serve para descobrir QUAL pagamento consultar
+   * (task 013, seção 9: integridade do webhook). `null` é tratado como
+   * ausente/inválido, nunca como "pular a validação".
+   */
+  transactionAmount: number | null;
+  currencyId: string | null;
+  paymentMethodId: string | null;
+  paymentTypeId: string | null;
 }
 
 export type WebhookOutcome =
@@ -1020,6 +1037,11 @@ export type WebhookOutcome =
   | { kind: "unknown_order" }
   | { kind: "stale_attempt" }
   | { kind: "no_transition" }
+  /** Valor, moeda, método ou id ausente/incoerente — nunca aprova nem publica. */
+  | { kind: "invalid_snapshot" }
+  | { kind: "amount_mismatch" }
+  | { kind: "currency_mismatch" }
+  | { kind: "method_mismatch" }
   | { kind: "applied"; internalStatus: InternalOrderStatus };
 
 /**
@@ -1034,7 +1056,13 @@ export type WebhookOutcome =
  * 2. pedido desconhecido — `external_reference` não bate com nenhum pedido;
  * 3. tentativa superada — o pagamento da notificação não é o mais recente
  *    registrado no pedido (ex.: 2ª tentativa de cartão já está em andamento);
- * 4. fora de ordem — a transição não é permitida a partir do estado atual
+ * 4. valor, moeda e método — nunca confiar em número enviado pelo corpo do
+ *    webhook: comparados contra o que o servidor calculou na criação do
+ *    pedido, ANTES de vincular qualquer id ou aplicar qualquer transição;
+ * 5. vínculo atômico de `providerPaymentId` — compare-and-swap no banco,
+ *    não read-then-write; cobre o caso do webhook chegar antes de
+ *    `recordPaymentAttempt` rodar (ver `resolveWebhookOutcome`);
+ * 6. fora de ordem — a transição não é permitida a partir do estado atual
  *    (`shouldApplyTransition`), ex.: notificação atrasada de "pending"
  *    chegando depois de o pedido já ter sido aprovado.
  */
@@ -1091,6 +1119,64 @@ export async function applyMercadoPagoWebhook(
 
 type WebhookOrder = NonNullable<Awaited<ReturnType<typeof prisma.order.findUnique>>>;
 
+type WebhookSnapshotProblem = "invalid_snapshot" | "amount_mismatch" | "currency_mismatch" | "method_mismatch";
+
+type WebhookSnapshotValidation =
+  | { ok: true; method: "PIX" | "CARD" }
+  | { ok: false; problem: WebhookSnapshotProblem };
+
+/**
+ * Um pedido "tem o método X ativo" quando `isCardBusy`/`isPixBusy` (a mesma
+ * exclusão mútua entre Pix e cartão, ver mais acima) diz que aquele método
+ * está ocupado agora. Reusar essas funções em vez de uma checagem paralela
+ * é o que garante que "cobrança Pix antiga não pode ganhar o vínculo de uma
+ * tentativa atual de cartão, nem o inverso" (task 013, seção 9) — se o
+ * cartão é a tentativa corrente, `isCardBusy` já diz isso; um Pix chegando
+ * por trás não pode vencer.
+ */
+function activeMethodConflict(
+  order: Parameters<typeof isCardBusy>[0] & Parameters<typeof isPixBusy>[0],
+  incomingMethod: "PIX" | "CARD",
+  now: Date,
+): boolean {
+  if (incomingMethod === "CARD" && isPixBusy(order, now)) return true;
+  if (incomingMethod === "PIX" && isCardBusy(order)) return true;
+  return false;
+}
+
+/**
+ * Valida valor, moeda e método do retrato consultado no Mercado Pago contra
+ * o pedido — ANTES de vincular qualquer id ou aplicar qualquer transição
+ * (task 013, seção 9). Nunca usa comparação de ponto flutuante para decidir
+ * "bate ou não bate": `toCentsExact` converte para centavos inteiros (ou
+ * `null` se a precisão for incompatível), e a comparação final é inteiro
+ * contra inteiro.
+ */
+function validateWebhookSnapshot(
+  order: WebhookOrder,
+  input: MercadoPagoWebhookInput,
+  now: Date,
+): WebhookSnapshotValidation {
+  if (!input.currencyId) return { ok: false, problem: "invalid_snapshot" };
+
+  const cents = toCentsExact(input.transactionAmount);
+  if (cents === null) return { ok: false, problem: "invalid_snapshot" };
+  if (cents !== order.amount) return { ok: false, problem: "amount_mismatch" };
+
+  if (input.currencyId.toUpperCase() !== order.currency.toUpperCase()) {
+    return { ok: false, problem: "currency_mismatch" };
+  }
+
+  const method: MercadoPagoPaymentMethod = mapMercadoPagoPaymentMethod(
+    input.paymentMethodId,
+    input.paymentTypeId,
+  );
+  if (method === "UNKNOWN") return { ok: false, problem: "invalid_snapshot" };
+  if (activeMethodConflict(order, method, now)) return { ok: false, problem: "method_mismatch" };
+
+  return { ok: true, method };
+}
+
 /**
  * Decide e aplica o efeito de uma notificação já reservada. Separada de
  * `applyMercadoPagoWebhook` para que a marcação de "evento concluído" fique
@@ -1102,22 +1188,66 @@ async function resolveWebhookOutcome(
 ): Promise<WebhookOutcome> {
   if (!order) return { kind: "unknown_order" };
 
+  // Já vinculado a OUTRO id: tentativa superada. Decidido antes de qualquer
+  // validação de valor/moeda/método — uma cobrança que não é mais a
+  // corrente não deve reabrir a discussão nem influenciar nada.
   if (order.providerPaymentId && order.providerPaymentId !== input.providerPaymentId) {
     return { kind: "stale_attempt" };
   }
 
+  const now = new Date();
+  const validation = validateWebhookSnapshot(order, input, now);
+  if (!validation.ok) return { kind: validation.problem };
+
+  let current = order;
+
+  // Vínculo atômico do providerPaymentId — só quando ainda não vinculado.
+  // Compare-and-swap no banco (`providerPaymentId: null` como condição),
+  // não read-then-write: cobre o caso do webhook chegar ANTES de
+  // `recordPaymentAttempt` rodar — cartão é aprovado de forma síncrona pelo
+  // Mercado Pago e a notificação sai quase junto com a resposta, ou a
+  // chamada original termina em falha ambígua (`socket hang up`) e
+  // `recordPaymentAttempt` nunca chega a executar. Sem isto, o pedido podia
+  // terminar PAID com `providerPaymentId` nulo para sempre, e o suporte
+  // perderia o vínculo com a cobrança.
+  //
+  // Junto com o id, grava o método (mapeado, nunca a string do provedor) e
+  // limpa a reserva/ambiguidade do método correspondente — a mesma folga
+  // que `recordPaymentAttempt` daria se tivesse chegado a rodar.
+  if (!current.providerPaymentId) {
+    const claimed = await prisma.order.updateMany({
+      where: { id: current.id, providerPaymentId: null, status: { in: [...RETRYABLE_STATUSES] } },
+      data: {
+        providerPaymentId: input.providerPaymentId,
+        paymentMethod: validation.method,
+        ...(validation.method === "CARD"
+          ? { cardClaimedAt: null, cardIdempotencyKey: null, cardTokenFingerprint: null }
+          : {}),
+        ...(validation.method === "PIX" ? { pixClaimedAt: null, pixIdempotencyKey: null } : {}),
+      },
+    });
+
+    // Sempre relê depois: tanto no caminho feliz (pega o que acabou de ser
+    // gravado) quanto na corrida perdida (outra notificação, com OUTRO id,
+    // venceu entre a leitura e esta escrita — `claimed.count === 0`).
+    current = await prisma.order.findUniqueOrThrow({ where: { id: current.id } });
+    if (claimed.count === 0 && current.providerPaymentId && current.providerPaymentId !== input.providerPaymentId) {
+      return { kind: "stale_attempt" };
+    }
+  }
+
   const nextStatus = mapMercadoPagoStatus(input.status, input.statusDetail);
-  if (!shouldApplyTransition(order.status as InternalOrderStatus, nextStatus)) {
+  if (!shouldApplyTransition(current.status as InternalOrderStatus, nextStatus)) {
     return { kind: "no_transition" };
   }
 
   if (nextStatus === "PAID") {
-    await finalizeOrderAsPaid(order);
+    await finalizeOrderAsPaid(current);
   } else {
     // Mesmo guard otimista do claim de pagamento: só aplica se o estado
     // ainda for o que líamos há pouco (evita corrida com outro processo).
     await prisma.order.updateMany({
-      where: { id: order.id, status: order.status },
+      where: { id: current.id, status: current.status },
       data: { status: nextStatus },
     });
   }

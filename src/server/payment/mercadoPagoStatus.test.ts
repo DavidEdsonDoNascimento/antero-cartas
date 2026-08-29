@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mapMercadoPagoStatus, shouldApplyTransition } from "./mercadoPagoStatus";
+import {
+  mapMercadoPagoStatus,
+  shouldApplyTransition,
+  mapMercadoPagoPaymentMethod,
+} from "./mercadoPagoStatus";
 
 describe("mapMercadoPagoStatus", () => {
   it("mapeia approved para PAID", () => {
@@ -72,5 +76,25 @@ describe("shouldApplyTransition", () => {
     expect(shouldApplyTransition("PAID", "PAID")).toBe(false);
     expect(shouldApplyTransition("PENDING", "PENDING")).toBe(false);
     expect(shouldApplyTransition("REFUNDED", "REFUNDED")).toBe(false);
+  });
+});
+
+describe("mapMercadoPagoPaymentMethod", () => {
+  it("mapeia payment_method_id 'pix' para PIX, independente do payment_type_id", () => {
+    expect(mapMercadoPagoPaymentMethod("pix", "bank_transfer")).toBe("PIX");
+    expect(mapMercadoPagoPaymentMethod("pix", null)).toBe("PIX");
+  });
+
+  it("mapeia crédito e débito para CARD", () => {
+    expect(mapMercadoPagoPaymentMethod("visa", "credit_card")).toBe("CARD");
+    expect(mapMercadoPagoPaymentMethod("master", "credit_card")).toBe("CARD");
+    expect(mapMercadoPagoPaymentMethod("elo", "debit_card")).toBe("CARD");
+  });
+
+  it("qualquer outra combinação (ticket, atm, ausente) é UNKNOWN — nunca aprova", () => {
+    expect(mapMercadoPagoPaymentMethod("bolbradesco", "ticket")).toBe("UNKNOWN");
+    expect(mapMercadoPagoPaymentMethod(null, null)).toBe("UNKNOWN");
+    expect(mapMercadoPagoPaymentMethod(undefined, undefined)).toBe("UNKNOWN");
+    expect(mapMercadoPagoPaymentMethod("visa", null)).toBe("UNKNOWN"); // sem payment_type_id não desambigua
   });
 });

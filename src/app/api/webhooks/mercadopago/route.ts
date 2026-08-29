@@ -61,6 +61,10 @@ export async function POST(req: Request): Promise<Response> {
       status: payment.status,
       statusDetail: payment.statusDetail,
       type,
+      transactionAmount: payment.transactionAmount,
+      currencyId: payment.currencyId,
+      paymentMethodId: payment.paymentMethodId,
+      paymentTypeId: payment.paymentTypeId,
     });
     console.log("[webhook][mercadopago] processado", {
       notificationId,

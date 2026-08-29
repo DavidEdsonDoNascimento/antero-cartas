@@ -314,20 +314,51 @@ describe("getPaymentStatus", () => {
 });
 
 describe("fetchMercadoPagoPayment", () => {
-  it("devolve status, status_detail e external_reference crus (para o webhook mapear)", async () => {
+  it("devolve status, status_detail, external_reference, valor, moeda e método crus (para o webhook validar)", async () => {
     const { impl } = stubFetch(
       jsonResponse(200, {
         id: 55,
         status: "cancelled",
         status_detail: "expired",
         external_reference: "order_123",
+        transaction_amount: 18.9,
+        currency_id: "BRL",
+        payment_method_id: "pix",
+        payment_type_id: "bank_transfer",
       }),
     );
     const snapshot = await fetchMercadoPagoPayment("55", { ...OPTS, fetchImpl: impl });
     expect(snapshot).toEqual({
+      providerPaymentId: "55",
       status: "cancelled",
       statusDetail: "expired",
       externalReference: "order_123",
+      transactionAmount: 18.9,
+      currencyId: "BRL",
+      paymentMethodId: "pix",
+      paymentTypeId: "bank_transfer",
     });
+  });
+
+  it("devolve null nos campos ausentes, sem inventar valor default", async () => {
+    const { impl } = stubFetch(jsonResponse(200, { id: 55, status: "pending" }));
+    const snapshot = await fetchMercadoPagoPayment("55", { ...OPTS, fetchImpl: impl });
+    expect(snapshot).toEqual({
+      providerPaymentId: "55",
+      status: "pending",
+      statusDetail: null,
+      externalReference: null,
+      transactionAmount: null,
+      currencyId: null,
+      paymentMethodId: null,
+      paymentTypeId: null,
+    });
+  });
+
+  it("lança quando o id devolvido é diferente do id solicitado", async () => {
+    const { impl } = stubFetch(jsonResponse(200, { id: 999, status: "approved" }));
+    await expect(fetchMercadoPagoPayment("55", { ...OPTS, fetchImpl: impl })).rejects.toThrow(
+      /id diferente do solicitado/,
+    );
   });
 });

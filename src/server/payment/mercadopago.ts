@@ -49,6 +49,12 @@ interface MpPaymentResponse {
   status: string;
   status_detail?: string;
   external_reference?: string | null;
+  transaction_amount?: number;
+  currency_id?: string;
+  /** Ex.: "visa", "master", "pix" — identifica o meio, não o tipo. */
+  payment_method_id?: string;
+  /** Ex.: "credit_card", "debit_card", "bank_transfer" — desambigua cartão de Pix. */
+  payment_type_id?: string;
   point_of_interaction?: {
     transaction_data?: {
       qr_code?: string;
@@ -225,16 +231,38 @@ export function createMercadoPagoProvider(options: MercadoPagoOptions = {}): Pay
   };
 }
 
+/**
+ * Retrato confiável de um pagamento — só o que veio de uma consulta direta
+ * à API do Mercado Pago (nunca do corpo do webhook, que é usado somente
+ * para descobrir QUAL pagamento consultar). `transactionAmount`/`currencyId`
+ * permitem ao chamador validar valor e moeda contra o pedido antes de
+ * aprovar qualquer coisa (task 013, seção 9); `paymentMethodId`/
+ * `paymentTypeId` permitem distinguir Pix de cartão sem adivinhar pelo
+ * `status`.
+ */
 export interface MercadoPagoPaymentSnapshot {
+  /** Sempre igual ao id solicitado — `fetchMercadoPagoPayment` garante isso. */
+  providerPaymentId: string;
   status: string;
   statusDetail: string | null;
   externalReference: string | null;
+  /** Em reais (como a API devolve), não em centavos — cru, sem conversão. */
+  transactionAmount: number | null;
+  currencyId: string | null;
+  paymentMethodId: string | null;
+  paymentTypeId: string | null;
 }
 
 /**
  * Busca o pagamento completo no Mercado Pago a partir do `data.id` recebido
  * no webhook — a notificação em si só traz o id, nunca o estado (task 013,
  * seção 9: "consulta ao provedor quando necessária").
+ *
+ * Valida que o `id` devolvido pela API é exatamente o id solicitado: uma
+ * resposta com outro id (bug do provedor, proxy mal configurado, resposta
+ * cacheada errada) nunca deve ser tratada como se fosse o pagamento pedido —
+ * lança em vez de devolver um retrato que não corresponde ao que foi
+ * consultado.
  */
 export async function fetchMercadoPagoPayment(
   providerPaymentId: string,
@@ -242,9 +270,23 @@ export async function fetchMercadoPagoPayment(
 ): Promise<MercadoPagoPaymentSnapshot> {
   const cfg = resolveConfig(options);
   const data = await callMercadoPago(cfg, `/v1/payments/${providerPaymentId}`, { method: "GET" });
+
+  const returnedId = String(data.id);
+  if (returnedId !== providerPaymentId) {
+    throw new Error(
+      "Mercado Pago devolveu um pagamento com id diferente do solicitado " +
+        `(pedido ${providerPaymentId}, devolvido ${returnedId}).`,
+    );
+  }
+
   return {
+    providerPaymentId: returnedId,
     status: data.status,
     statusDetail: data.status_detail ?? null,
     externalReference: data.external_reference ?? null,
+    transactionAmount: typeof data.transaction_amount === "number" ? data.transaction_amount : null,
+    currencyId: data.currency_id ?? null,
+    paymentMethodId: data.payment_method_id ?? null,
+    paymentTypeId: data.payment_type_id ?? null,
   };
 }

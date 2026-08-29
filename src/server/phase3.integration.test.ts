@@ -41,6 +41,27 @@ function useMockPaymentConfirmation(): void {
   vi.stubEnv("ALLOW_MOCK_PAYMENT_CONFIRMATION", "true");
 }
 
+/**
+ * Campos do retrato consultado no Mercado Pago que fazem uma notificação
+ * bater com o pedido padrão de teste (plano LIMITED, R$18,90, BRL) — ver
+ * `createPixLikeOrder`/`createPendingOrder`. Task 013, seção 9: nunca
+ * confiar em valor/moeda/método enviados pelo corpo do webhook; aqui eles
+ * simulam o que viria de uma consulta real e correta ao provedor.
+ */
+const pixSnapshot = {
+  transactionAmount: 18.9,
+  currencyId: "BRL",
+  paymentMethodId: "pix",
+  paymentTypeId: "bank_transfer",
+} as const;
+
+const cardSnapshot = {
+  transactionAmount: 18.9,
+  currencyId: "BRL",
+  paymentMethodId: "visa",
+  paymentTypeId: "credit_card",
+} as const;
+
 describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { timeout: DB_TIMEOUT }, () => {
   let prisma: typeof import("@/lib/db").prisma;
   let cartService: typeof import("@/server/cartService");
@@ -95,6 +116,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     const order = await createPixLikeOrder(paymentId);
 
     const first = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_1_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -113,6 +135,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
 
     // Mesmo evento de novo (retry do provedor) — mesmo providerEventId.
     const duplicate = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_1_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -132,6 +155,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     // Notificação diferente (novo providerEventId), mesmo pagamento, mesmo
     // status já aplicado — idempotente por transição, não só por dedup de evento.
     const secondEventSameOutcome = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_2_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -150,6 +174,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     const order = await createPixLikeOrder(paymentId);
 
     await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_a_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -161,6 +186,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
 
     // Notificação de "pending" chega atrasada, depois da aprovação já processada.
     const outOfOrder = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_b_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -186,6 +212,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     });
 
     const staleEvent = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_stale_${RUN_ID}`,
       providerPaymentId: oldPaymentId, // tentativa antiga, já substituída
@@ -202,6 +229,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
 
   it("responde 'unknown_order' para external_reference que não existe, sem lançar erro", async () => {
     const outcome = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_unknown_${RUN_ID}`,
       providerPaymentId: `mp_unknown_${RUN_ID}`,
@@ -217,6 +245,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     const paymentId = `mp_refund_001_${RUN_ID}`;
     const order = await createPixLikeOrder(paymentId);
     await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_paid_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -227,6 +256,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     });
 
     const refunded = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_refund_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -248,6 +278,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     const paymentId = `mp_rejected_001_${RUN_ID}`;
     const order = await createPixLikeOrder(paymentId);
     const outcome = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_rejected_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -266,6 +297,7 @@ describe.skipIf(!RUN)("Fase 3 — webhook do Mercado Pago (integração)", { tim
     const paymentId = `mp_expired_001_${RUN_ID}`;
     const order = await createPixLikeOrder(paymentId);
     const outcome = await orderService.applyMercadoPagoWebhook({
+      ...pixSnapshot,
       provider: "mercadopago",
       providerEventId: `evt_expired_${RUN_ID}`,
       providerPaymentId: paymentId,
@@ -407,6 +439,7 @@ describe.skipIf(!RUN)(
             name: "mercadopago",
             async createPayment(input: { orderId: string }) {
               await orderService.applyMercadoPagoWebhook({
+                ...cardSnapshot,
                 provider: "mercadopago",
                 providerEventId: `evt_race_card_${RUN_ID}`,
                 providerPaymentId,
@@ -477,6 +510,7 @@ describe.skipIf(!RUN)(
             name: "mercadopago",
             async createPayment(input: { orderId: string }) {
               await orderService.applyMercadoPagoWebhook({
+                ...pixSnapshot,
                 provider: "mercadopago",
                 providerEventId: `evt_race_pix_${RUN_ID}`,
                 providerPaymentId,
@@ -1036,6 +1070,7 @@ describe.skipIf(!RUN)(
       );
 
       const notification = {
+        ...pixSnapshot,
         provider: "mercadopago",
         providerEventId,
         providerPaymentId,
@@ -1093,6 +1128,7 @@ describe.skipIf(!RUN)(
       );
 
       const notification = {
+        ...pixSnapshot,
         provider: "mercadopago",
         providerEventId,
         providerPaymentId,
