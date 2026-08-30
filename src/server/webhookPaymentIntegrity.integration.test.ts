@@ -66,6 +66,29 @@ describe.skipIf(!RUN)(
       orderService = await import("@/server/orderService");
     });
 
+    // `createFreshOrder` pressupõe o provider REAL — Order PENDING sem
+    // nenhum método vinculado ainda, esperando a primeira notificação. Com
+    // o provider mock, `createOrder` já vincularia um `providerPaymentId`
+    // na própria criação, invalidando esse pressuposto e fazendo os
+    // webhooks sintéticos abaixo caírem em `stale_attempt` antes de chegar
+    // à validação testada. O `.env.local` do desenvolvedor pode estar em
+    // PAYMENT_MODE=mock (padrão local) e é carregado pelo vitest.config,
+    // então — como os testes irmãos que criam pedidos "de verdade"
+    // (`publicCartAccess.integration.test.ts`,
+    // `route.integration.test.ts`) — cada teste declara aqui o ambiente de
+    // que precisa em vez de herdar o que estiver no shell. EMAIL_MODE=mock
+    // por segurança: os cenários que chegam a PAID disparam
+    // `finalizeOrderAsPaid`/e-mail, e nunca devem depender de um "real"
+    // deixado no ambiente local.
+    beforeEach(() => {
+      vi.stubEnv("PAYMENT_MODE", "real");
+      vi.stubEnv("EMAIL_MODE", "mock");
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     afterAll(async () => {
       for (const cartId of cartIdsToClean) {
         const orders = await prisma.order.findMany({ where: { cartId }, select: { id: true } });
