@@ -92,3 +92,26 @@ describe("OrderSuccessClient — aviso de e-mail por modo de pagamento", () => {
     expect(text).toContain("Guarde o link e o QR Code acima");
   });
 });
+
+/**
+ * Incidente de 2026-08-30: o cartão foi aprovado, mas a leitura da página de
+ * sucesso caiu na janela em que Order já estava PAID e a carta ainda não
+ * publicada — `cart`/`publicUrl` nulos. A tela caía em FailedView e mostrava
+ * "Não foi possível concluir o pedido.", convidando a um perigoso "Tentar
+ * novamente" sobre um pedido já pago. A causa raiz (duas escritas não
+ * atômicas) foi corrigida em `finalizeOrderAsPaid`; esta é a rede de
+ * segurança do lado do cliente para qualquer leitura que ainda assim
+ * encontre esse estado transitório.
+ */
+describe("OrderSuccessClient — PAID sem publicUrl (incidente 2026-08-30)", () => {
+  it("nunca renderiza FailedView nem link para o checkout — mostra que o pagamento foi confirmado", async () => {
+    getOrderResult.mockResolvedValue({ ...PAID_RESULT, cart: null, publicUrl: null });
+
+    const text = await renderPaidScreen("real");
+
+    expect(text).not.toContain("Não foi possível concluir o pedido");
+    expect(text).not.toContain("Tentar novamente");
+    expect(text).toContain("Pagamento confirmado");
+    expect(text).toMatch(/finaliz/i);
+  });
+});

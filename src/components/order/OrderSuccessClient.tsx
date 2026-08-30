@@ -106,6 +106,14 @@ export function OrderSuccessClient({ orderId }: { orderId: string }) {
     return <PaidView cart={cart} publicUrl={publicUrl} qrCodeDataUrl={qrCodeDataUrl} planType={order.planType} />;
   }
 
+  // Pagamento já aprovado, mas a publicação da carta ainda não chegou nesta
+  // leitura (ver reduceOrderPoll) — nunca é uma falha. Tratar como
+  // FailedView convidaria a "Tentar novamente" sobre um pedido já pago: foi
+  // exatamente esse ramo que produziu o incidente de 2026-08-30.
+  if (order.status === "PAID") {
+    return <Centered>Pagamento confirmado! Estamos finalizando sua cartinha, só um instante…</Centered>;
+  }
+
   return <FailedView status={order.status} cartId={order.cartId} />;
 }
 
