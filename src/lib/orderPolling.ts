@@ -62,6 +62,17 @@ export function classifyOrderError(err: unknown): { message: string; retryable: 
  * Decide o próximo estado da UI a partir do resultado de uma tentativa de
  * polling. Nunca deixa a chamada em aberto: toda saída é "continue" (com um
  * novo poll agendado por quem chama) ou "pare" (estado terminal definido).
+ *
+ * PAID sem `publicUrl` (incidente de 2026-08-30): a Order já foi aprovada,
+ * mas a publicação da carta (Cart -> PUBLISHED, slug) ainda não chegou
+ * nesta leitura. Desde a correção do incidente as duas escritas são
+ * atômicas na mesma transação, então essa janela só existe entre o commit
+ * e a resposta deste poll chegar ao navegador — nunca um estado
+ * permanentemente inconsistente. Tratado como "ainda não resolvido" para
+ * fins de polling, exatamente como PENDING (continua consultando até o
+ * mesmo prazo, sem loop infinito); NUNCA gera `pending_timeout` (que diria
+ * "ainda não conseguimos confirmar seu pagamento" — falso aqui, o
+ * pagamento já está confirmado) nem cai em erro/falha.
  */
 export function reduceOrderPoll(
   outcome: OrderPollOutcome,
@@ -74,11 +85,20 @@ export function reduceOrderPoll(
   }
 
   const { result } = outcome;
-  if (result.order.status !== "PENDING") {
+  const stillFinalizing = result.order.status === "PAID" && !result.publicUrl;
+  const unresolved = result.order.status === "PENDING" || stillFinalizing;
+
+  if (!unresolved) {
     return { action: "stop", state: { kind: "result", result } };
   }
   if (elapsedMs >= timeoutMs) {
-    return { action: "stop", state: { kind: "pending_timeout", result } };
+    // PAID ainda finalizando: devolve o resultado normal (nunca
+    // pending_timeout) — quem renderiza decide o texto certo a partir de
+    // order.status/publicUrl, sem afirmar que o pagamento não foi confirmado.
+    return {
+      action: "stop",
+      state: stillFinalizing ? { kind: "result", result } : { kind: "pending_timeout", result },
+    };
   }
   return { action: "keep_polling", state: { kind: "result", result } };
 }

@@ -87,6 +87,21 @@ export async function createOrder(
   if (cart.status !== "DRAFT" && cart.status !== "AWAITING_PAYMENT") {
     throw new ApiError("forbidden_state", "Esta carta já foi processada.");
   }
+
+  // Rede de segurança independente de Cart.status (incidente de
+  // 2026-08-30): um pedido já PAID nunca deve permitir a criação de outro
+  // — mesmo que, por algum motivo fora do caminho normal, a Cart ainda
+  // esteja AWAITING_PAYMENT. "Tentar novamente" na tela de sucesso volta
+  // para o checkout; sem esta guarda, isso poderia gerar uma segunda
+  // cobrança real sobre um pedido que já foi pago.
+  const paidOrder = await prisma.order.findFirst({
+    where: { cartId: cart.id, status: "PAID" },
+    select: { id: true },
+  });
+  if (paidOrder) {
+    throw new ApiError("forbidden_state", "Esta carta já foi processada.");
+  }
+
   const contentOk = cart.title.trim() && cart.message.trim() && cart.senderName.trim() && cart.recipientType;
   if (!contentOk) {
     throw new ApiError("conflict", "Complete a cartinha antes de ir para o pagamento.");
@@ -986,6 +1001,20 @@ export async function mockConfirmOrder(
  *
  * Devolve `false` se outra chamada concorrente já resolveu o pedido — nada é
  * republicado nem reenviado.
+ *
+ * Correção do incidente de 2026-08-30: o claim da Order (`PENDING -> PAID`)
+ * e a publicação da Cart aconteciam em duas transações separadas. Entre uma
+ * e outra existia uma janela real em que `Order.status === "PAID"` com a
+ * Cart ainda não publicada (sem slug) — uma leitura que caísse exatamente
+ * ali (ex.: o poll da página de sucesso) via um pagamento aprovado como se
+ * tivesse falhado, porque `publicUrl` ainda era nulo. As duas escritas
+ * agora vivem na MESMA `prisma.$transaction`: nenhum leitor externo pode
+ * observar `PAID` sem a carta publicada. Se `publishCartWithClient` lançar
+ * (ex.: cartinha incompleta), a transação inteira sofre rollback e a Order
+ * volta a `PENDING` — pronta para uma nova tentativa (o webhook do Mercado
+ * Pago já reenvia sozinho em caso de 500; ver route.ts), sem cobrança
+ * perdida nem carta meio publicada. O e-mail continua fora da transação, de
+ * propósito: só deve ser disparado depois que o commit acima for definitivo.
  */
 async function finalizeOrderAsPaid(order: {
   id: string;
@@ -994,19 +1023,22 @@ async function finalizeOrderAsPaid(order: {
   customerEmail: string;
 }): Promise<false | { cart: Cart; publicUrl: string; qrCodeDataUrl: string | null }> {
   const now = new Date();
-  const claim = await prisma.order.updateMany({
-    where: { id: order.id, status: "PENDING" },
-    data: { status: "PAID", paidAt: now },
-  });
-  if (claim.count === 0) return false;
 
-  const publishedRow = await prisma.$transaction((tx) =>
-    publishCartWithClient(tx, order.cartId, now),
-  );
+  const publishedRow = await prisma.$transaction(async (tx) => {
+    const claim = await tx.order.updateMany({
+      where: { id: order.id, status: "PENDING" },
+      data: { status: "PAID", paidAt: now },
+    });
+    if (claim.count === 0) return null;
+    return publishCartWithClient(tx, order.cartId, now);
+  });
+  if (!publishedRow) return false;
+
   const cart = dbToDomainCart(publishedRow as unknown as DbCartRow);
   const publicUrl = buildPublicCartUrl(cart.slug!);
   const qrCodeDataUrl = await generateQrDataUrl(publicUrl);
 
+  // Só depois do commit acima — nunca dentro da transação de pagamento.
   await deliverPublishedEmail(
     order.id,
     order.customerName,

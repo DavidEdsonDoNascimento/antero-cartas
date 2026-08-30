@@ -21,7 +21,23 @@ function pendingResult(): OrderResult {
   };
 }
 
+/** PAID já totalmente resolvido: Order aprovada E carta publicada. */
 function paidResult(): OrderResult {
+  return {
+    ...pendingResult(),
+    order: { ...pendingResult().order, status: "PAID" },
+    cart: { id: "cart-1", title: "Carta de teste", slug: "abc123" } as OrderResult["cart"],
+    publicUrl: "https://exemplo.test/c/abc123",
+  };
+}
+
+/**
+ * PAID mas ainda sem `publicUrl` — a janela (hoje só teórica, ver
+ * finalizeOrderAsPaid) entre a Order aprovada e a publicação da carta
+ * terminar. Nunca deve ser tratado como falha nem encerrar o polling antes
+ * do prazo (incidente de 2026-08-30).
+ */
+function paidNotFinalizedResult(): OrderResult {
   return { ...pendingResult(), order: { ...pendingResult().order, status: "PAID" } };
 }
 
@@ -64,10 +80,26 @@ describe("classifyOrderError", () => {
 });
 
 describe("reduceOrderPoll", () => {
-  it("status PAID para o polling e devolve o resultado (não fica preso em PENDING)", () => {
+  it("status PAID (com publicUrl) para o polling e devolve o resultado (não fica preso em PENDING)", () => {
     const decision = reduceOrderPoll({ ok: true, result: paidResult() }, 1000, 20000);
     expect(decision.action).toBe("stop");
     expect(decision.state.kind).toBe("result");
+  });
+
+  it("PAID sem publicUrl continua o polling (pagamento aprovado, publicação ainda em andamento — incidente de 2026-08-30)", () => {
+    const decision = reduceOrderPoll({ ok: true, result: paidNotFinalizedResult() }, 1000, 20000);
+    expect(decision.action).toBe("keep_polling");
+    expect(decision.state.kind).toBe("result");
+  });
+
+  it("PAID sem publicUrl encerra o polling ao chegar no prazo, mas nunca vira pending_timeout (mensagem seria falsa: o pagamento já foi confirmado)", () => {
+    const decision = reduceOrderPoll({ ok: true, result: paidNotFinalizedResult() }, 20000, 20000);
+    expect(decision.action).toBe("stop");
+    expect(decision.state.kind).toBe("result");
+    if (decision.state.kind === "result") {
+      expect(decision.state.result.order.status).toBe("PAID");
+      expect(decision.state.result.publicUrl).toBeNull();
+    }
   });
 
   it("PENDING dentro do prazo continua o polling", () => {
