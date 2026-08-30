@@ -211,6 +211,7 @@ de teste, rollback) estão no runbook de produção.
 - [`docs/0006_Runbook_Producao.md`](docs/0006_Runbook_Producao.md) — runbook de produção, checklist manual, Mercado Pago e Resend
 - [`docs/0008_Handoff_Fase2_5_Final.md`](docs/0008_Handoff_Fase2_5_Final.md) — estado final da Fase 2.5
 - [`docs/tasks/013_fase_3.md`](docs/tasks/013_fase_3.md) — escopo da Fase 3 (pagamento e e-mail reais)
+- [`docs/tasks-pending/`](docs/tasks-pending/) — tarefas técnicas conhecidas e deliberadamente adiadas, com gatilho de retomada
 
 ## Configuração central
 - `src/config/site.ts` — marca, copy e posicionamento
