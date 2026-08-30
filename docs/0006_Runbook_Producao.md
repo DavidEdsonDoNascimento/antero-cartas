@@ -762,11 +762,90 @@ de teste para produção sem essa autorização — ver seção 16.
 - **Contestação (chargeback)**: o Mercado Pago notifica via webhook
   (`charged_back`); o pedido some da vitrine de "válidos" mas o registro
   fica no banco para consulta/suporte.
-- **Pedido "preso" em `PENDING`**: confira o painel do Mercado Pago pelo
-  `providerPaymentId` — se lá já estiver `approved` e o webhook não chegou
-  (raro), rode manualmente uma consulta com `getPaymentStatus` e, se
-  confirmado, decida com cautela se vale reenviar a notificação pelo painel
-  do Mercado Pago em vez de escrever direto no banco.
+- **Pedido "preso" em `PENDING`**: ver a subseção **TODO pós-MVP —
+  reconciliação automática de pagamentos ambíguos**, logo abaixo, para o
+  cenário completo e o procedimento manual provisório.
+
+### TODO pós-MVP — reconciliação automática de pagamentos ambíguos
+
+**Cenário.** O Mercado Pago cria a cobrança, mas a resposta HTTP se perde
+antes de `recordPaymentAttempt` gravar qualquer coisa — timeout de função
+serverless, queda de conexão, 5xx (ver seção 6.1, "falha ambígua") — **e** o
+webhook correspondente também não chega (ou ainda não chegou). É o único
+elo que falta para fechar o ciclo: se o webhook chega depois, mesmo tarde,
+`resolveWebhookOutcome` (`src/server/orderService.ts`) já vincula
+`providerPaymentId` atomicamente e resolve tudo sozinho (task 013 seção 9,
+correção de 2026-08-29). O que falta é o caso em que o webhook **nunca**
+chega — falha de entrega do provedor, notificação perdida, URL
+temporariamente fora do ar.
+
+**Comportamento atual (fail-closed).** A reserva ambígua (`cardClaimedAt`/
+`cardIdempotencyKey`/`cardTokenFingerprint`, ou o equivalente do Pix) fica
+gravada indefinidamente — nada a libera sozinha. O pedido permanece
+`PENDING` e `isCardBusy`/`isPixBusy` continuam bloqueando qualquer outra
+tentativa de cobrança para aquele pedido (mesmo pagamento, Pix ou cartão),
+exatamente para impedir uma segunda cobrança enquanto o desfecho da primeira
+continuar desconhecido.
+
+**Risco atual.** Se o Mercado Pago aprovou a cobrança de verdade e só a
+notificação se perdeu, o cliente pagou e a carta não é publicada até que
+alguém do suporte intervenha manualmente. Volume baixo do MVP torna esse
+risco aceitável por ora — mas ele não desaparece sozinho com o tempo.
+
+**Decisão do MVP.** Aceitar tratamento manual (ver procedimento abaixo)
+devido ao baixo volume inicial de vendas. Nenhum mecanismo automático foi
+implementado nesta tarefa — só documentado.
+
+**Implementação futura (não implementada):**
+
+- pesquisa em `GET /v1/payments/search?external_reference=<order.id>` no
+  Mercado Pago, para descobrir uma cobrança sem depender do webhook;
+- reutilização das validações já existentes de valor, moeda e método
+  (`validateWebhookSnapshot`/`toCentsExact`/`mapMercadoPagoPaymentMethod`,
+  `src/server/orderService.ts` e `src/server/payment/`) — a busca não deve
+  reabrir a discussão sobre o que já foi decidido para o webhook, só
+  alimentá-la com o pagamento encontrado;
+- seleção **conservadora**: zero candidatos não faz nada; um candidato segue
+  para as mesmas validações do webhook; mais de um candidato para o mesmo
+  `external_reference` não deve escolher sozinho — exige decisão humana;
+- idempotência: reconciliar o mesmo pedido duas vezes não pode duplicar
+  publicação nem e-mail (reusar `applyMercadoPagoWebhook`/
+  `finalizeOrderAsPaid`, que já são idempotentes, em vez de um caminho
+  paralelo);
+- rota protegida por `CRON_SECRET` (ou mecanismo equivalente) — nunca
+  pública;
+- Vercel Cron (ou mecanismo equivalente) chamando essa rota periodicamente;
+- uma ferramenta administrativa/manual para reconciliar **uma** Order
+  específica sob demanda, para os casos que o cron ainda não cobrir ou que
+  precisem de decisão humana (múltiplos candidatos, valor divergente etc.).
+
+**Gatilhos para priorizar esta implementação:**
+
+- o primeiro caso real de pedido preso com pagamento aprovado;
+- aumento relevante no volume de vendas (o tratamento manual deixa de
+  escalar);
+- o atendimento manual do procedimento abaixo virando recorrente.
+
+**Procedimento manual provisório (sem SQL de escrita, só leitura):**
+
+1. Localize a Order pelo suporte — e-mail do comprador ou id do pedido
+   (link `/pedido/<id>/sucesso` ou o que o comprador informar).
+2. Pesquise a `external_reference` (= id da Order) no painel do Mercado
+   Pago (Atividade → busca) ou via `GET /v1/payments/search`.
+3. Confira, no pagamento encontrado: `id`, `transaction_amount`,
+   `currency_id`, `payment_method_id`/`payment_type_id` e `status` — contra
+   os mesmos dados da Order (`amount`, `currency`, método esperado).
+4. **Nunca** limpe reservas (`cardClaimedAt`/`cardIdempotencyKey`/
+   `pixClaimedAt`/`pixIdempotencyKey`) nem marque a Order como `PAID`
+   manualmente sem essa comprovação — escrever esses campos direto no banco
+   contorna todas as validações que existem por escrito no código.
+5. Se o pagamento estiver **aprovado** e a aplicação não tiver entregue a
+   carta: registre o incidente (id do pedido, id do pagamento, datas) e
+   resolva a entrega/reembolso de forma controlada e rastreável — não pelo
+   banco direto.
+6. Se **não houver** pagamento correspondente (ou ele não bater com a
+   Order): não libere a tentativa às cegas — a reserva existe justamente
+   para essa incerteza continuar bloqueando uma segunda cobrança.
 
 ---
 

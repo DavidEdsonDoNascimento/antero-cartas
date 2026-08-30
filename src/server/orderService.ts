@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { ApiError } from "@/server/errors";
 import { getPlan } from "@/config/plans";
 import { site } from "@/config/site";
@@ -13,8 +14,14 @@ import {
   type PaymentStatus,
   type PixPaymentData,
 } from "@/server/payment";
-import { mapMercadoPagoStatus, shouldApplyTransition } from "@/server/payment/mercadoPagoStatus";
+import {
+  mapMercadoPagoStatus,
+  mapMercadoPagoPaymentMethod,
+  shouldApplyTransition,
+  type MercadoPagoPaymentMethod,
+} from "@/server/payment/mercadoPagoStatus";
 import { MercadoPagoRequestRejectedError } from "@/server/payment/mercadopago";
+import { toCentsExact } from "@/server/payment/money";
 import { getEmailProvider } from "@/server/email";
 import { generateQrDataUrl } from "@/server/qrcode";
 import { verifyEditToken } from "@/lib/editToken";
@@ -162,6 +169,148 @@ function isRetryable(status: string): boolean {
 const PIX_CLAIM_STALE_MS = 30_000;
 
 /**
+ * Janela em que uma reserva de cobrança de cartão é considerada "em
+ * andamento". Mais generosa que a do Pix (30 s) de propósito: no cartão a
+ * reserva também cobre a janela ambígua depois de uma falha, e precisa durar
+ * o bastante para o webhook do Mercado Pago chegar e resolver o pedido antes
+ * de o comprador conseguir cobrar num cartão diferente. Curta o bastante para
+ * não prender ninguém caso a cobrança nunca tenha sido criada.
+ *
+ * Declarada aqui (e não perto de `claimCardAttempt`, que é onde é usada)
+ * porque `isCardBusy`/`cardBusyWhere` — a exclusão mútua com o Pix, logo
+ * abaixo — também precisam dela, e são chamadas por `claimOrReusePixAttempt`,
+ * que vem antes no arquivo.
+ */
+const CARD_CLAIM_STALE_MS = 90_000;
+
+/**
+ * Exclusão mútua entre Pix e cartão (task 013, seção 8 — correção de
+ * fechamento). As reservas de cada método vivem em colunas próprias
+ * (`pix*` / `card*`) e por isso nunca se enxergavam: nada impedia que as
+ * duas fossem reivindicadas ao mesmo tempo, cada uma cega ao estado da
+ * outra — incidente descoberto em auditoria, nunca em produção.
+ *
+ * As duas funções `isXBusy` respondem à mesma pergunta — "o OUTRO método
+ * está ocupado agora?" — e são usadas cruzadas: `claimOrReusePixAttempt`
+ * chama `isCardBusy`, `claimCardAttempt` chama `isPixBusy`. Cada uma tem uma
+ * irmã em `Prisma.OrderWhereInput` (sufixo `Where`) que expressa exatamente
+ * a mesma condição para ser **negada** dentro do `updateMany` de
+ * reivindicação — é isso que torna a exclusão atômica de verdade, e não só
+ * uma checagem otimista: a segunda reivindicação de uma corrida só é
+ * reavaliada depois que a primeira já tiver commitado (mesmo travamento de
+ * linha que já protege cada método contra si mesmo — Postgres reavalia o
+ * `WHERE` de um `UPDATE` bloqueado contra a linha já commitada quando o
+ * lock libera), e nesse ponto ela enxerga o método irmão. As duas versões —
+ * a função pura e o fragmento Prisma — precisam continuar equivalentes;
+ * qualquer mudança numa exige a mesma mudança na outra.
+ *
+ * "Ocupado" cobre dois estados bem diferentes, deliberadamente unidos:
+ * - CONFIRMADO E AINDA PAGÁVEL: existe uma cobrança que o comprador ainda
+ *   pode pagar (Pix com QR não vencido) ou que já foi criada no provedor e
+ *   aguarda o webhook (cartão com `providerPaymentId`, ainda `PENDING`).
+ * - AMBÍGUO OU EM ANDAMENTO: a chamada ao provedor pode ter criado uma
+ *   cobrança sem que ainda saibamos (reserva em voo agora mesmo, ou chave
+ *   persistida sem resultado confirmado). Bloquear aqui também é
+ *   obrigatório — permitir o outro método nesta janela arrisca cobrar duas
+ *   vezes pelo mesmo pedido.
+ *
+ * Nenhuma das duas checa `paymentMethod` para a parte "ambíguo/em
+ * andamento": `pixClaimedAt`/`pixIdempotencyKey` e `cardIdempotencyKey` só
+ * são escritos pelo próprio fluxo daquele método, nunca pelo do outro — a
+ * mera presença já basta como sinal, porque `paymentMethod` ainda pode
+ * apontar para a ÚLTIMA tentativa RESOLVIDA (de qualquer um dos dois
+ * métodos) enquanto a reivindicação atual está em voo. `paymentMethod` só
+ * entra na parte "confirmado e pagável", que depende de qual foi essa
+ * última tentativa resolvida.
+ *
+ * `isCardBusy` do lado do cartão **não depende de `CARD_CLAIM_STALE_MS`**
+ * (correção de uma janela residual de cobrança dupla, achada em auditoria
+ * pós-implementação): o TTL existe só para decidir quando esta MESMA
+ * tentativa (mesmo token) pode ser reapresentada com a MESMA chave — ele
+ * nunca significou que uma cobrança ambígua deixou de existir no provedor.
+ * `cardIdempotencyKey` só é `null` quando a tentativa foi de fato resolvida
+ * (sucesso, recusa determinística ou 4xx — todos limpam a chave); enquanto
+ * ela seguir gravada, o desfecho continua desconhecido e o Pix continua
+ * bloqueado, não importa há quanto tempo. (A checagem "mesmo token, mesma
+ * chave" que PERMITE um retry depois do TTL vive em `claimCardAttempt`, não
+ * aqui — `isCardBusy` só decide se o OUTRO método pode passar, e a resposta
+ * para ele é sempre não enquanto a ambiguidade não for resolvida.)
+ */
+function isCardBusy(
+  order: {
+    status: string;
+    paymentMethod: string;
+    providerPaymentId: string | null;
+    cardIdempotencyKey: string | null;
+  },
+): boolean {
+  if (order.status !== "PENDING") return false;
+  const ambiguoOuEmAndamento = order.cardIdempotencyKey !== null;
+  const cobrancaConfirmadaAguardandoWebhook =
+    order.paymentMethod === "CARD" && order.providerPaymentId !== null;
+  return ambiguoOuEmAndamento || cobrancaConfirmadaAguardandoWebhook;
+}
+
+/**
+ * Espelho de `isCardBusy` em `Prisma.OrderWhereInput` — ver comentário acima.
+ * Sem comparação de tempo: as duas condições (`cardIdempotencyKey` gravada,
+ * ou cobrança confirmada aguardando webhook) já são sempre determinadas por
+ * "IS NOT NULL"/"IS NULL", nunca por `>=`/`<=` sobre coluna anulável — não
+ * há o risco de `NULL` de três valores que motivou o `not: null` explícito
+ * na versão anterior desta função (comparação de data já não existe mais).
+ */
+function cardBusyWhere(): Prisma.OrderWhereInput {
+  return {
+    status: "PENDING",
+    OR: [
+      { cardIdempotencyKey: { not: null } },
+      { AND: [{ paymentMethod: "CARD" }, { providerPaymentId: { not: null } }] },
+    ],
+  };
+}
+
+/**
+ * Um Pix "vivo" exige QR não vencido — checar só `paymentMethod === "PIX"`
+ * (o bug original) reapresentaria um Pix expirado como se ainda fosse
+ * pagável para sempre, já que nada nunca limpa essas colunas sozinho.
+ */
+function isPixBusy(
+  order: {
+    status: string;
+    paymentMethod: string;
+    pixQrCode: string | null;
+    pixExpiresAt: Date | null;
+    pixIdempotencyKey: string | null;
+  },
+  now: Date,
+): boolean {
+  if (order.status !== "PENDING") return false;
+  const ambiguoOuEmAndamento = order.pixIdempotencyKey !== null && order.pixQrCode === null;
+  const confirmadoEPagavel =
+    order.paymentMethod === "PIX" &&
+    order.pixQrCode !== null &&
+    (order.pixExpiresAt === null || order.pixExpiresAt.getTime() > now.getTime());
+  return ambiguoOuEmAndamento || confirmadoEPagavel;
+}
+
+/** Espelho de `isPixBusy` em `Prisma.OrderWhereInput` — ver comentário acima. */
+function pixBusyWhere(now: Date): Prisma.OrderWhereInput {
+  return {
+    status: "PENDING",
+    OR: [
+      { AND: [{ pixIdempotencyKey: { not: null } }, { pixQrCode: null }] },
+      {
+        AND: [
+          { paymentMethod: "PIX" },
+          { pixQrCode: { not: null } },
+          { OR: [{ pixExpiresAt: null }, { pixExpiresAt: { gt: now } }] },
+        ],
+      },
+    ],
+  };
+}
+
+/**
  * Encerramento de uma tentativa de cartão que o provedor já resolveu.
  * `expectedKey` é a chave com que ESTA tentativa reivindicou: ela entra no
  * `where` como compare-and-swap para que uma tentativa superada nunca
@@ -178,6 +327,18 @@ interface CardAttemptResolution {
    * depois — a carta nunca seria publicada.
    */
   resolvedStatus: "PENDING" | "FAILED";
+}
+
+/**
+ * Encerramento de uma tentativa de Pix que o provedor já resolveu (criação
+ * bem-sucedida — só chega aqui quando `result.pix` existe). `expectedKey` é
+ * o mesmo papel do CAS do cartão: compare-and-swap simétrico, para que uma
+ * tentativa de Pix superada (chave já rotacionada por outra chamada) também
+ * nunca sobrescreva o que está gravado.
+ */
+interface PixAttemptResolution {
+  expectedKey: string;
+  pix: PixPaymentData;
 }
 
 /**
@@ -200,7 +361,7 @@ async function recordPaymentAttempt(
   paymentMethod: "PIX" | "CARD",
   providerName: string,
   providerPaymentId: string,
-  pix?: PixPaymentData,
+  pix?: PixAttemptResolution,
   card?: CardAttemptResolution,
 ): Promise<void> {
   const attempt = {
@@ -212,9 +373,9 @@ async function recordPaymentAttempt(
     pixClaimedAt: null,
     ...(pix
       ? {
-          pixQrCode: pix.qrCode,
-          pixQrCodeBase64: pix.qrCodeBase64,
-          pixExpiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+          pixQrCode: pix.pix.qrCode,
+          pixQrCodeBase64: pix.pix.qrCodeBase64,
+          pixExpiresAt: pix.pix.expiresAt ? new Date(pix.pix.expiresAt) : null,
           // Único ponto que descarta a chave de idempotência: aqui a tentativa
           // terminou de forma DEFINITIVA (o provedor respondeu e temos o Pix
           // gravado). Qualquer outro desfecho é ambíguo e precisa preservá-la.
@@ -233,30 +394,43 @@ async function recordPaymentAttempt(
       : {}),
   };
 
-  // CAS da tentativa de cartão: se outra tentativa já rotacionou a chave,
-  // esta aqui está superada e não pode escrever nada.
+  // CAS simétrico dos dois métodos: se outra tentativa (do mesmo método) já
+  // rotacionou a chave, esta aqui está superada e não pode escrever nada.
+  const pixGuard = pix ? { pixIdempotencyKey: pix.expectedKey } : {};
   const cardGuard = card ? { cardIdempotencyKey: card.expectedKey } : {};
 
   const claimed = await prisma.order.updateMany({
-    where: { id: orderId, status: { in: [...RETRYABLE_STATUSES] }, ...cardGuard },
+    where: { id: orderId, status: { in: [...RETRYABLE_STATUSES] }, ...pixGuard, ...cardGuard },
     data: { ...attempt, status: card?.resolvedStatus ?? "PENDING" },
   });
   if (claimed.count > 0) return;
 
   const recorded = await prisma.order.updateMany({
-    where: { id: orderId, providerPaymentId: null, ...cardGuard },
+    where: { id: orderId, providerPaymentId: null, ...pixGuard, ...cardGuard },
     data: attempt,
   });
-  if (recorded.count > 0 || !card) return;
+  if (recorded.count > 0 || !(pix || card)) return;
 
-  // Nenhuma das duas escritas pegou uma tentativa de cartão: ou o webhook já
-  // resolveu o pedido com OUTRA cobrança, ou a chave rotacionou. Recusar a
-  // sobrescrita é o comportamento correto, mas a cobrança que acabamos de
-  // criar não pode sumir — o log é o que permite reconciliá-la (o
-  // `PaymentEvent` do webhook dela também guarda o mesmo id).
-  console.error("[pagamento] cobrança de cartão criada sem vínculo com o pedido", {
+  // Nenhuma das duas escritas pegou a tentativa: ou o webhook já resolveu o
+  // pedido com OUTRA cobrança, ou a chave rotacionou. Relê antes de soar o
+  // alerta — o webhook pode ter vinculado atomicamente exatamente ESTE
+  // `providerPaymentId` enquanto esta chamada ainda estava em voo (a
+  // notificação chega quase junto com a resposta, ou a chamada original
+  // demora e o webhook chega primeiro; ver `resolveWebhookOutcome`, CAS de
+  // vínculo). Nesse caso o pedido já está corretamente ligado à cobrança
+  // que acabamos de criar — é sucesso idempotente, não um vínculo perdido,
+  // e reportar como erro seria um falso alerta operacional.
+  const current = await prisma.order.findUnique({ where: { id: orderId } });
+  if (current?.providerPaymentId === providerPaymentId) return;
+
+  // Continua nulo ou é um id DIFERENTE: agora sim a cobrança que acabamos de
+  // criar não tem vínculo nenhum com o pedido, e não pode sumir — o log é o
+  // que permite reconciliá-la (o `PaymentEvent` do webhook dela também
+  // guarda o mesmo id).
+  console.error("[pagamento] cobrança criada sem vínculo com o pedido", {
     orderId,
     providerPaymentId,
+    paymentMethod,
     motivo: "tentativa superada por outra (compare-and-swap da chave falhou)",
   });
 }
@@ -294,12 +468,26 @@ type PixClaim =
 /** Pix já registrado no pedido, pronto para ser reaproveitado como está. */
 type ReusableOrder = { pixQrCode: string; pixQrCodeBase64: string };
 
-function reusablePix(order: {
-  paymentMethod: string;
-  pixQrCode: string | null;
-  pixQrCodeBase64: string | null;
-}): order is typeof order & ReusableOrder {
-  return order.paymentMethod === "PIX" && !!order.pixQrCode && order.pixQrCodeBase64 !== null;
+/**
+ * Pix já registrado no pedido, pronto para ser reaproveitado como está —
+ * exige QR ainda **não vencido** (task 013, seção 8 — correção de
+ * fechamento). Checar só `paymentMethod === "PIX"` (o bug original)
+ * reapresentaria um Pix expirado como se ainda fosse pagável para sempre,
+ * já que nenhuma outra rotina limpa essas colunas sozinha.
+ */
+function reusablePix(
+  order: {
+    paymentMethod: string;
+    pixQrCode: string | null;
+    pixQrCodeBase64: string | null;
+    pixExpiresAt: Date | null;
+  },
+  now: Date,
+): order is typeof order & ReusableOrder {
+  if (order.paymentMethod !== "PIX" || !order.pixQrCode || order.pixQrCodeBase64 === null) {
+    return false;
+  }
+  return order.pixExpiresAt === null || order.pixExpiresAt.getTime() > now.getTime();
 }
 
 /**
@@ -310,13 +498,20 @@ function reusablePix(order: {
  * consegue mover `pixClaimedAt` de nulo (ou expirado) para agora segue em
  * frente para chamar o Mercado Pago (task 013; incidente de 2026-08-07 —
  * pedido cmsixlhc000032ydptvluv4zu recebeu dois PIX reais de uma única ação
- * do usuário).
+ * do usuário). Também recusa se o cartão estiver ocupado (`isCardBusy`) —
+ * exclusão mútua entre os dois métodos, task 013 seção 8.
  *
  * Devolve junto a `X-Idempotency-Key` a ser enviada ao provedor, **já
  * persistida**: uma tentativa ainda não resolvida reaproveita exatamente a
  * chave que gravou antes de chamar o provedor, para que reapresentar uma
  * operação de resultado desconhecido devolva o mesmo pagamento em vez de
- * criar um segundo. Chave nova só nasce quando não há tentativa em aberto.
+ * criar um segundo. Chave nova só nasce quando não há tentativa em aberto —
+ * e também quando o Pix da chave anterior já venceu: reenviar aquela chave
+ * devolveria do provedor o MESMO pagamento, agora expirado, em vez de criar
+ * um novo (`before.pixIdempotencyKey` já está `null` nesse caso, porque
+ * `recordPaymentAttempt` a descarta assim que o Pix é criado com sucesso —
+ * então a expressão abaixo já nasce fresca sem precisar de tratamento
+ * especial).
  *
  * Guarda dedicada, não reaproveita `providerPaymentId`: essa coluna também
  * precisa continuar aceitando troca de método (ex.: cartão recusado, cliente
@@ -331,6 +526,7 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
   // é exatamente o que precisamos nunca perder.
   for (let round = 0; round < 2; round++) {
     const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    const now = new Date();
 
     if (!isRetryable(before.status)) {
       throw new ApiError(
@@ -338,7 +534,16 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
         "Este pedido já foi concluído e não pode ser pago novamente.",
       );
     }
-    if (reusablePix(before)) {
+
+    if (isCardBusy(before)) {
+      throw new ApiError(
+        "conflict",
+        "Já existe uma tentativa de pagamento com cartão em andamento para este pedido. " +
+          "Aguarde a confirmação antes de tentar com Pix.",
+      );
+    }
+
+    if (reusablePix(before, now)) {
       return {
         kind: "reuse",
         result: {
@@ -352,26 +557,53 @@ async function claimOrReusePixAttempt(orderId: string): Promise<PixClaim> {
       };
     }
 
-    const now = new Date();
     const staleBefore = new Date(now.getTime() - PIX_CLAIM_STALE_MS);
     // Chave de uma tentativa anterior ainda não resolvida é reaproveitada tal
-    // e qual; só na ausência dela nasce uma nova.
+    // e qual; só na ausência dela nasce uma nova (inclusive quando o Pix
+    // anterior só está vencido — ver comentário da função acima).
     const idempotencyKey = before.pixIdempotencyKey ?? randomUUID();
 
     const claimed = await prisma.order.updateMany({
       where: {
         id: orderId,
         status: { in: [...RETRYABLE_STATUSES] },
-        // Só reivindica se não houver Pix válido já registrado para
-        // reaproveitar — sem esta condição, uma chamada sequencial DEPOIS de
-        // uma tentativa já concluída (que limpa pixClaimedAt de volta para
-        // nulo em recordPaymentAttempt) reivindicaria de novo em vez de cair
-        // no reaproveitamento acima.
-        pixQrCode: null,
         pixIdempotencyKey: before.pixIdempotencyKey,
-        OR: [{ pixClaimedAt: null }, { pixClaimedAt: { lt: staleBefore } }],
+        // Exclusão mútua com o cartão: nenhuma reivindicação de Pix pode
+        // vencer enquanto o cartão estiver ocupado (mesma condição de
+        // `isCardBusy`, reavaliada de verdade após o lock da linha liberar).
+        NOT: cardBusyWhere(),
+        AND: [
+          // Só reivindica se não houver Pix ainda pagável para reaproveitar
+          // (reaproveitamento cai no `if` acima) — um Pix VENCIDO também
+          // libera a reivindicação, para permitir uma tentativa nova em vez
+          // de ficar preso ao QR morto para sempre (task 013, seção 8).
+          // `pixExpiresAt: { not: null }` explícito pelo mesmo motivo do
+          // comentário em `cardBusyWhere`: sem ele, um Pix com QR mas sem
+          // `pixExpiresAt` (provedor não devolveu validade) faria o `lte`
+          // virar NULL em SQL em vez de `false`, e a linha inteira sumiria
+          // do `updateMany` mesmo sem nenhum Pix vencido de verdade.
+          {
+            OR: [
+              { pixQrCode: null },
+              { AND: [{ pixExpiresAt: { not: null } }, { pixExpiresAt: { lte: now } }] },
+            ],
+          },
+          // Reserva de OUTRA chamada de Pix ainda viva bloqueia esta.
+          { OR: [{ pixClaimedAt: null }, { pixClaimedAt: { lt: staleBefore } }] },
+        ],
       },
-      data: { pixClaimedAt: now, pixIdempotencyKey: idempotencyKey },
+      data: {
+        pixClaimedAt: now,
+        pixIdempotencyKey: idempotencyKey,
+        // Derruba o QR vencido (se houver) já na reivindicação: enquanto a
+        // chamada ao provedor está em voo, `isPixBusy` precisa enxergar
+        // "ambíguo" (`pixIdempotencyKey` setada, `pixQrCode` nulo) para
+        // continuar bloqueando o cartão nesta janela — deixar o QR morto
+        // parado aqui abriria uma fresta para o cartão colar no meio.
+        pixQrCode: null,
+        pixQrCodeBase64: null,
+        pixExpiresAt: null,
+      },
     });
     if (claimed.count > 0) return { kind: "claimed", idempotencyKey };
   }
@@ -424,7 +656,10 @@ export async function createPixPaymentAttempt(
       throw new ApiError("server", "O provedor de pagamento não retornou os dados do Pix.");
     }
 
-    await recordPaymentAttempt(order.id, "PIX", provider.name, result.providerPaymentId, result.pix);
+    await recordPaymentAttempt(order.id, "PIX", provider.name, result.providerPaymentId, {
+      expectedKey: claim.idempotencyKey,
+      pix: result.pix,
+    });
     const updated = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
 
     return { order: toSummary(updated), pix: result.pix };
@@ -449,16 +684,6 @@ export interface CardAttemptInput {
 }
 
 /**
- * Janela em que uma reserva de cobrança de cartão é considerada "em
- * andamento". Mais generosa que a do Pix (30 s) de propósito: no cartão a
- * reserva também cobre a janela ambígua depois de uma falha, e precisa durar
- * o bastante para o webhook do Mercado Pago chegar e resolver o pedido antes
- * de o comprador conseguir cobrar num cartão diferente. Curta o bastante para
- * não prender ninguém caso a cobrança nunca tenha sido criada.
- */
-const CARD_CLAIM_STALE_MS = 90_000;
-
-/**
  * Impressão do token do cartão. Nunca guardamos o token (ele vale uma vez, é
  * dado de pagamento e não tem por que existir no nosso banco) — só um SHA-256
  * dele, que responde à única pergunta que o serviço precisa fazer: "esta
@@ -479,10 +704,15 @@ function cardTokenFingerprint(cardToken: string): string {
  * Por isso a chave aqui pertence à tentativa (identificada pela impressão do
  * token), não ao pedido.
  *
- * As três recusas possíveis, todas 409:
- * - pedido já concluído (PAID/REFUNDED/CHARGED_BACK);
+ * As cinco recusas possíveis, todas 409:
+ * - pedido já concluído (PAID/REFUNDED/CHARGED_BACK, via `forbidden_state`);
  * - já existe cobrança de cartão viva aguardando confirmação;
- * - já existe uma tentativa em andamento (reserva ainda válida).
+ * - já existe uma tentativa em andamento (reserva ainda dentro do TTL);
+ * - já existe uma tentativa AMBÍGUA (chave gravada, provedor nunca
+ *   confirmou nada) e o token apresentado é DIFERENTE do que a reivindicou —
+ *   mesmo depois do TTL (ver comentário sobre `CARD_CLAIM_STALE_MS` abaixo);
+ * - já existe um Pix ocupado (`isPixBusy`) — exclusão mútua entre os dois
+ *   métodos, task 013 seção 8.
  */
 async function claimCardAttempt(orderId: string, cardToken: string): Promise<string> {
   const fingerprint = cardTokenFingerprint(cardToken);
@@ -498,11 +728,19 @@ async function claimCardAttempt(orderId: string, cardToken: string): Promise<str
   // ainda não conhecemos.
   for (let round = 0; round < 2; round++) {
     const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    const now = new Date();
 
     if (!isRetryable(before.status)) {
       throw new ApiError(
         "forbidden_state",
         "Este pedido já foi concluído e não pode ser pago novamente.",
+      );
+    }
+
+    if (isPixBusy(before, now)) {
+      throw new ApiError(
+        "conflict",
+        "Já existe um Pix pendente para este pedido. Pague o Pix ou aguarde vencer antes de tentar com cartão.",
       );
     }
 
@@ -517,14 +755,38 @@ async function claimCardAttempt(orderId: string, cardToken: string): Promise<str
       );
     }
 
-    const now = new Date();
     const staleBefore = new Date(now.getTime() - CARD_CLAIM_STALE_MS);
+    // Dentro do TTL, bloqueia QUALQUER tentativa nova — mesmo token ou não.
+    // É só o "em andamento agora mesmo" (chamada real em voo, tempo real).
     if (before.cardClaimedAt && before.cardClaimedAt >= staleBefore) throw emAndamento;
 
     // Mesmo token ⇒ mesma operação reapresentada ⇒ mesma chave (o provedor
     // devolve a cobrança original em vez de criar outra). Token diferente ⇒
-    // tentativa nova ⇒ chave nova.
+    // tentativa nova ⇒ chave nova — MAS só quando a tentativa anterior já
+    // não é mais ambígua.
     const mesmaTentativa = before.cardIdempotencyKey !== null && before.cardTokenFingerprint === fingerprint;
+
+    // Fora do TTL, mas ainda AMBÍGUA (chave gravada, `providerPaymentId`
+    // nunca escrito por essa tentativa): o Mercado Pago pode ter criado a
+    // cobrança sem que a resposta tenha chegado — o TTL de
+    // `CARD_CLAIM_STALE_MS` só existe para permitir que a MESMA operação
+    // seja reapresentada com a MESMA chave depois de um tempo razoável
+    // (processo morto, função serverless reciclada); ele nunca significou
+    // que a cobrança deixou de existir no provedor. Um token DIFERENTE
+    // nunca pode superar essa ambiguidade: seria uma cobrança nova, e a
+    // antiga pode muito bem ter sido aprovada no meio tempo. A resolução
+    // definitiva (descobrir o que aconteceu de fato) é reconciliação com o
+    // Mercado Pago — fora do escopo desta correção; aqui só se garante que
+    // nada colide enquanto ela não acontece.
+    const ambiguaSemResolucao = before.cardIdempotencyKey !== null && before.providerPaymentId === null;
+    if (ambiguaSemResolucao && !mesmaTentativa) {
+      throw new ApiError(
+        "conflict",
+        "Já existe uma tentativa de pagamento com cartão sem confirmação para este pedido. " +
+          "Não é possível tentar com outro cartão até essa tentativa ser confirmada ou recusada.",
+      );
+    }
+
     const idempotencyKey = mesmaTentativa ? before.cardIdempotencyKey! : randomUUID();
 
     const claimed = await prisma.order.updateMany({
@@ -534,6 +796,22 @@ async function claimCardAttempt(orderId: string, cardToken: string): Promise<str
         providerPaymentId: before.providerPaymentId,
         cardIdempotencyKey: before.cardIdempotencyKey,
         OR: [{ cardClaimedAt: null }, { cardClaimedAt: { lt: staleBefore } }],
+        AND: [
+          // Exclusão mútua com o Pix: nenhuma reivindicação de cartão pode
+          // vencer enquanto o Pix estiver ocupado (mesma condição de
+          // `isPixBusy`, reavaliada de verdade após o lock da linha liberar).
+          { NOT: pixBusyWhere(now) },
+          // Espelho exato do `if (ambiguaSemResolucao && !mesmaTentativa)`
+          // acima, reavaliado contra a linha já travada — mesmo motivo de
+          // sempre: a checagem em memória sozinha não seria atômica contra
+          // uma segunda reivindicação que entre no meio. Omitida quando
+          // `mesmaTentativa` já é `true`: nesse caso a condição nunca
+          // bloquearia mesmo (o token bate), então incluí-la seria só
+          // trabalho a mais para o banco.
+          ...(mesmaTentativa
+            ? []
+            : [{ NOT: { AND: [{ cardIdempotencyKey: { not: null } }, { providerPaymentId: null }] } }]),
+        ],
       },
       data: {
         cardClaimedAt: now,
@@ -752,6 +1030,17 @@ export interface MercadoPagoWebhookInput {
   status: string;
   statusDetail: string | null;
   type: string;
+  /**
+   * Os quatro campos abaixo vêm de uma consulta direta à API do Mercado
+   * Pago (`fetchMercadoPagoPayment`), nunca do corpo da notificação em si —
+   * o corpo do webhook só serve para descobrir QUAL pagamento consultar
+   * (task 013, seção 9: integridade do webhook). `null` é tratado como
+   * ausente/inválido, nunca como "pular a validação".
+   */
+  transactionAmount: number | null;
+  currencyId: string | null;
+  paymentMethodId: string | null;
+  paymentTypeId: string | null;
 }
 
 export type WebhookOutcome =
@@ -759,6 +1048,11 @@ export type WebhookOutcome =
   | { kind: "unknown_order" }
   | { kind: "stale_attempt" }
   | { kind: "no_transition" }
+  /** Valor, moeda, método ou id ausente/incoerente — nunca aprova nem publica. */
+  | { kind: "invalid_snapshot" }
+  | { kind: "amount_mismatch" }
+  | { kind: "currency_mismatch" }
+  | { kind: "method_mismatch" }
   | { kind: "applied"; internalStatus: InternalOrderStatus };
 
 /**
@@ -773,7 +1067,13 @@ export type WebhookOutcome =
  * 2. pedido desconhecido — `external_reference` não bate com nenhum pedido;
  * 3. tentativa superada — o pagamento da notificação não é o mais recente
  *    registrado no pedido (ex.: 2ª tentativa de cartão já está em andamento);
- * 4. fora de ordem — a transição não é permitida a partir do estado atual
+ * 4. valor, moeda e método — nunca confiar em número enviado pelo corpo do
+ *    webhook: comparados contra o que o servidor calculou na criação do
+ *    pedido, ANTES de vincular qualquer id ou aplicar qualquer transição;
+ * 5. vínculo atômico de `providerPaymentId` — compare-and-swap no banco,
+ *    não read-then-write; cobre o caso do webhook chegar antes de
+ *    `recordPaymentAttempt` rodar (ver `resolveWebhookOutcome`);
+ * 6. fora de ordem — a transição não é permitida a partir do estado atual
  *    (`shouldApplyTransition`), ex.: notificação atrasada de "pending"
  *    chegando depois de o pedido já ter sido aprovado.
  */
@@ -830,6 +1130,64 @@ export async function applyMercadoPagoWebhook(
 
 type WebhookOrder = NonNullable<Awaited<ReturnType<typeof prisma.order.findUnique>>>;
 
+type WebhookSnapshotProblem = "invalid_snapshot" | "amount_mismatch" | "currency_mismatch" | "method_mismatch";
+
+type WebhookSnapshotValidation =
+  | { ok: true; method: "PIX" | "CARD" }
+  | { ok: false; problem: WebhookSnapshotProblem };
+
+/**
+ * Um pedido "tem o método X ativo" quando `isCardBusy`/`isPixBusy` (a mesma
+ * exclusão mútua entre Pix e cartão, ver mais acima) diz que aquele método
+ * está ocupado agora. Reusar essas funções em vez de uma checagem paralela
+ * é o que garante que "cobrança Pix antiga não pode ganhar o vínculo de uma
+ * tentativa atual de cartão, nem o inverso" (task 013, seção 9) — se o
+ * cartão é a tentativa corrente, `isCardBusy` já diz isso; um Pix chegando
+ * por trás não pode vencer.
+ */
+function activeMethodConflict(
+  order: Parameters<typeof isCardBusy>[0] & Parameters<typeof isPixBusy>[0],
+  incomingMethod: "PIX" | "CARD",
+  now: Date,
+): boolean {
+  if (incomingMethod === "CARD" && isPixBusy(order, now)) return true;
+  if (incomingMethod === "PIX" && isCardBusy(order)) return true;
+  return false;
+}
+
+/**
+ * Valida valor, moeda e método do retrato consultado no Mercado Pago contra
+ * o pedido — ANTES de vincular qualquer id ou aplicar qualquer transição
+ * (task 013, seção 9). Nunca usa comparação de ponto flutuante para decidir
+ * "bate ou não bate": `toCentsExact` converte para centavos inteiros (ou
+ * `null` se a precisão for incompatível), e a comparação final é inteiro
+ * contra inteiro.
+ */
+function validateWebhookSnapshot(
+  order: WebhookOrder,
+  input: MercadoPagoWebhookInput,
+  now: Date,
+): WebhookSnapshotValidation {
+  if (!input.currencyId) return { ok: false, problem: "invalid_snapshot" };
+
+  const cents = toCentsExact(input.transactionAmount);
+  if (cents === null) return { ok: false, problem: "invalid_snapshot" };
+  if (cents !== order.amount) return { ok: false, problem: "amount_mismatch" };
+
+  if (input.currencyId.toUpperCase() !== order.currency.toUpperCase()) {
+    return { ok: false, problem: "currency_mismatch" };
+  }
+
+  const method: MercadoPagoPaymentMethod = mapMercadoPagoPaymentMethod(
+    input.paymentMethodId,
+    input.paymentTypeId,
+  );
+  if (method === "UNKNOWN") return { ok: false, problem: "invalid_snapshot" };
+  if (activeMethodConflict(order, method, now)) return { ok: false, problem: "method_mismatch" };
+
+  return { ok: true, method };
+}
+
 /**
  * Decide e aplica o efeito de uma notificação já reservada. Separada de
  * `applyMercadoPagoWebhook` para que a marcação de "evento concluído" fique
@@ -841,22 +1199,66 @@ async function resolveWebhookOutcome(
 ): Promise<WebhookOutcome> {
   if (!order) return { kind: "unknown_order" };
 
+  // Já vinculado a OUTRO id: tentativa superada. Decidido antes de qualquer
+  // validação de valor/moeda/método — uma cobrança que não é mais a
+  // corrente não deve reabrir a discussão nem influenciar nada.
   if (order.providerPaymentId && order.providerPaymentId !== input.providerPaymentId) {
     return { kind: "stale_attempt" };
   }
 
+  const now = new Date();
+  const validation = validateWebhookSnapshot(order, input, now);
+  if (!validation.ok) return { kind: validation.problem };
+
+  let current = order;
+
+  // Vínculo atômico do providerPaymentId — só quando ainda não vinculado.
+  // Compare-and-swap no banco (`providerPaymentId: null` como condição),
+  // não read-then-write: cobre o caso do webhook chegar ANTES de
+  // `recordPaymentAttempt` rodar — cartão é aprovado de forma síncrona pelo
+  // Mercado Pago e a notificação sai quase junto com a resposta, ou a
+  // chamada original termina em falha ambígua (`socket hang up`) e
+  // `recordPaymentAttempt` nunca chega a executar. Sem isto, o pedido podia
+  // terminar PAID com `providerPaymentId` nulo para sempre, e o suporte
+  // perderia o vínculo com a cobrança.
+  //
+  // Junto com o id, grava o método (mapeado, nunca a string do provedor) e
+  // limpa a reserva/ambiguidade do método correspondente — a mesma folga
+  // que `recordPaymentAttempt` daria se tivesse chegado a rodar.
+  if (!current.providerPaymentId) {
+    const claimed = await prisma.order.updateMany({
+      where: { id: current.id, providerPaymentId: null, status: { in: [...RETRYABLE_STATUSES] } },
+      data: {
+        providerPaymentId: input.providerPaymentId,
+        paymentMethod: validation.method,
+        ...(validation.method === "CARD"
+          ? { cardClaimedAt: null, cardIdempotencyKey: null, cardTokenFingerprint: null }
+          : {}),
+        ...(validation.method === "PIX" ? { pixClaimedAt: null, pixIdempotencyKey: null } : {}),
+      },
+    });
+
+    // Sempre relê depois: tanto no caminho feliz (pega o que acabou de ser
+    // gravado) quanto na corrida perdida (outra notificação, com OUTRO id,
+    // venceu entre a leitura e esta escrita — `claimed.count === 0`).
+    current = await prisma.order.findUniqueOrThrow({ where: { id: current.id } });
+    if (claimed.count === 0 && current.providerPaymentId && current.providerPaymentId !== input.providerPaymentId) {
+      return { kind: "stale_attempt" };
+    }
+  }
+
   const nextStatus = mapMercadoPagoStatus(input.status, input.statusDetail);
-  if (!shouldApplyTransition(order.status as InternalOrderStatus, nextStatus)) {
+  if (!shouldApplyTransition(current.status as InternalOrderStatus, nextStatus)) {
     return { kind: "no_transition" };
   }
 
   if (nextStatus === "PAID") {
-    await finalizeOrderAsPaid(order);
+    await finalizeOrderAsPaid(current);
   } else {
     // Mesmo guard otimista do claim de pagamento: só aplica se o estado
     // ainda for o que líamos há pouco (evita corrida com outro processo).
     await prisma.order.updateMany({
-      where: { id: order.id, status: order.status },
+      where: { id: current.id, status: current.status },
       data: { status: nextStatus },
     });
   }

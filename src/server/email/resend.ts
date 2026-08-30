@@ -32,7 +32,9 @@ export function createResendEmailProvider(options: ResendOptions = {}): EmailPro
       if (!from) throw new Error("EMAIL_FROM não configurada.");
       const fetchImpl = options.fetchImpl ?? fetch;
 
-      const rendered = renderCartPublishedEmail(input);
+      // O Resend real não aceita `data:` URL inline no HTML — o QR Code
+      // viaja como anexo referenciado por `content_id`/`cid:` (ver render.ts).
+      const rendered = renderCartPublishedEmail(input, { inlineImagesAsAttachments: true });
 
       const res = await fetchImpl(RESEND_API, {
         method: "POST",
@@ -46,6 +48,18 @@ export function createResendEmailProvider(options: ResendOptions = {}): EmailPro
           subject: rendered.subject,
           html: rendered.html,
           text: rendered.text,
+          // Omitido por completo quando não há QR Code (ausente ou
+          // malformado) — nunca um anexo vazio.
+          ...(rendered.attachments.length > 0
+            ? {
+                attachments: rendered.attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.content,
+                  content_type: a.contentType,
+                  content_id: a.contentId,
+                })),
+              }
+            : {}),
         }),
       });
 

@@ -59,3 +59,28 @@ export function shouldApplyTransition(
   if (current === "PAID") return next === "REFUNDED" || next === "CHARGED_BACK";
   return false;
 }
+
+/**
+ * Método de pagamento no vocabulário interno — nunca `"UNKNOWN"` chega a
+ * aprovar ou publicar (task 013, seção 9: coerência do método de pagamento).
+ */
+export type MercadoPagoPaymentMethod = "PIX" | "CARD" | "UNKNOWN";
+
+/**
+ * Mapeia o método de pagamento devolvido pela consulta ao Mercado Pago para
+ * o vocabulário interno. `payment_method_id === "pix"` identifica o Pix
+ * diretamente; `payment_type_id` desambigua os tipos de cartão suportados
+ * (crédito e débito — nunca outro `payment_type_id` do Mercado Pago, como
+ * `ticket` ou `atm`, que este produto não vende). Qualquer combinação fora
+ * dessas vira `"UNKNOWN"` — o chamador (`resolveWebhookOutcome`,
+ * `orderService.ts`) trata isso como snapshot inválido e nunca aprova nem
+ * publica a partir dele.
+ */
+export function mapMercadoPagoPaymentMethod(
+  paymentMethodId: string | null | undefined,
+  paymentTypeId: string | null | undefined,
+): MercadoPagoPaymentMethod {
+  if (paymentMethodId === "pix") return "PIX";
+  if (paymentTypeId === "credit_card" || paymentTypeId === "debit_card") return "CARD";
+  return "UNKNOWN";
+}

@@ -78,9 +78,14 @@ describe("/api/webhooks/mercadopago", () => {
     const { fetchMercadoPagoPayment } = await import("@/server/payment/mercadopago");
     const { applyMercadoPagoWebhook } = await import("@/server/orderService");
     vi.mocked(fetchMercadoPagoPayment).mockResolvedValue({
+      providerPaymentId: "123456",
       status: "approved",
       statusDetail: "accredited",
       externalReference: "order_abc",
+      transactionAmount: 18.9,
+      currencyId: "BRL",
+      paymentMethodId: "pix",
+      paymentTypeId: "bank_transfer",
     });
     vi.mocked(applyMercadoPagoWebhook).mockResolvedValue({ kind: "applied", internalStatus: "PAID" });
 
@@ -99,6 +104,10 @@ describe("/api/webhooks/mercadopago", () => {
       status: "approved",
       statusDetail: "accredited",
       type: "payment",
+      transactionAmount: 18.9,
+      currencyId: "BRL",
+      paymentMethodId: "pix",
+      paymentTypeId: "bank_transfer",
     });
   });
 
@@ -119,9 +128,14 @@ describe("/api/webhooks/mercadopago", () => {
     const { fetchMercadoPagoPayment } = await import("@/server/payment/mercadopago");
     const { applyMercadoPagoWebhook } = await import("@/server/orderService");
     vi.mocked(fetchMercadoPagoPayment).mockResolvedValue({
+      providerPaymentId: "777",
       status: "pending",
       statusDetail: null,
       externalReference: "order_xyz",
+      transactionAmount: 18.9,
+      currencyId: "BRL",
+      paymentMethodId: "pix",
+      paymentTypeId: "bank_transfer",
     });
     vi.mocked(applyMercadoPagoWebhook).mockResolvedValue({ kind: "applied", internalStatus: "PENDING" });
 

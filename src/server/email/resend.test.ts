@@ -65,3 +65,50 @@ describe("createResendEmailProvider — envio", () => {
     });
   });
 });
+
+describe("createResendEmailProvider — QR Code por CID (task 013, seção 12)", () => {
+  const QR_BASE64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  const QR_DATA_URL = `data:image/png;base64,${QR_BASE64}`;
+
+  it("envia o QR Code como anexo por content_id, referenciado como cid: no HTML", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, { id: "email_123" }));
+    const provider = createResendEmailProvider({ ...OPTS, fetchImpl: impl });
+
+    await provider.sendCartPublished({ ...INPUT, qrCodeDataUrl: QR_DATA_URL });
+
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.html).toContain("cid:cartinha-qrcode");
+    expect(body.html).not.toContain(QR_BASE64);
+    expect(body.attachments).toHaveLength(1);
+    const [attachment] = body.attachments;
+    expect(attachment.content).toBe(QR_BASE64);
+    expect(attachment.filename).toBe("qr-code-cartinha.png");
+    expect(attachment.content_id).toBe("cartinha-qrcode");
+    expect(body.html).toContain(`cid:${attachment.content_id}`);
+  });
+
+  it("sem QR Code: não envia attachments (nunca um anexo vazio), link continua no HTML", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, { id: "email_123" }));
+    const provider = createResendEmailProvider({ ...OPTS, fetchImpl: impl });
+
+    await provider.sendCartPublished({ ...INPUT, qrCodeDataUrl: null });
+
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.attachments).toBeUndefined();
+    expect(body.html).toContain(INPUT.publicUrl);
+  });
+
+  it("QR Code malformado: nunca vira attachment nem aparece no HTML enviado ao Resend", async () => {
+    const { impl, calls } = stubFetch(jsonResponse(200, { id: "email_123" }));
+    const provider = createResendEmailProvider({ ...OPTS, fetchImpl: impl });
+
+    const malformado = "data:image/png;base64,not-valid-base64!!";
+    await provider.sendCartPublished({ ...INPUT, qrCodeDataUrl: malformado });
+
+    const body = JSON.parse(String(calls[0].init.body));
+    expect(body.attachments).toBeUndefined();
+    expect(body.html).not.toContain(malformado);
+    expect(body.html).toContain(INPUT.publicUrl);
+  });
+});

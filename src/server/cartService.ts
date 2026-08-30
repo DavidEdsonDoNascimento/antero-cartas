@@ -297,9 +297,42 @@ export type PublicCartResult =
   | { state: "not_found" }
   | { state: "expired" };
 
+/**
+ * Estornada (`REFUNDED`) ou contestada (`CHARGED_BACK`): o link continua
+ * existindo, mas o acesso público precisa parar — sem isso, uma carta
+ * estornada fica acessível para sempre (achado de auditoria, task 013
+ * seção 9). O mesmo `"not_found"` de uma cartinha inexistente é devolvido
+ * de propósito: o status financeiro do pedido nunca é público.
+ *
+ * `Order` é `Cart[]` (várias tentativas de pagamento podem existir para o
+ * mesmo rascunho — retry após recusa, plano trocado etc.), então a Order
+ * relevante não é "a primeira", é a mais recente que chegou a um estado
+ * pós-aprovação. `PAID`/`REFUNDED`/`CHARGED_BACK` são os únicos estados
+ * alcançáveis por uma Order depois de aprovada (`shouldApplyTransition` em
+ * `mercadoPagoStatus.ts` nunca aplica outra transição a partir de `PAID`) —
+ * por isso filtrar só por esses três já isola exatamente a tentativa que
+ * publicou (ou tentou reverter) esta carta, sem precisar casar por
+ * `paidAt`/`publishedAt` (que são timestamps gerados de forma independente
+ * e não coincidem byte a byte — conferido contra `prisma/seed.ts`).
+ *
+ * Cartas de demonstração/seed publicadas diretamente no banco
+ * (`prisma/seed.ts`, ex. `seed-expirada`) não têm Order nenhuma — a busca
+ * abaixo não encontra nada e o acesso é preservado, de propósito: não há
+ * pagamento nenhum para revogar.
+ */
+async function findReversedOrderStatus(cartId: string): Promise<"REFUNDED" | "CHARGED_BACK" | null> {
+  const order = await prisma.order.findFirst({
+    where: { cartId, status: { in: ["PAID", "REFUNDED", "CHARGED_BACK"] } },
+    orderBy: { paidAt: "desc" },
+    select: { status: true },
+  });
+  return order && order.status !== "PAID" ? (order.status as "REFUNDED" | "CHARGED_BACK") : null;
+}
+
 export async function getPublicCart(slug: string): Promise<PublicCartResult> {
   const row = await prisma.cart.findUnique({ where: { slug }, include: cartInclude });
   if (!row || row.status !== "PUBLISHED") return { state: "not_found" };
   if (isExpired(row.expiresAt)) return { state: "expired" };
+  if (await findReversedOrderStatus(row.id)) return { state: "not_found" };
   return { state: "ok", cart: dbToDomainCart(row as unknown as DbCartRow) };
 }

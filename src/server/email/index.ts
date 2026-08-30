@@ -1,9 +1,10 @@
 import type { EmailProvider } from "./EmailProvider";
 import { createMockEmailProvider } from "./mock";
 import { createResendEmailProvider } from "./resend";
+import { parseEmailMode, type EmailMode } from "@/config/emailMode";
 
-export function getEmailMode(): "mock" | "real" {
-  return (process.env.EMAIL_MODE ?? "mock") === "real" ? "real" : "mock";
+export function getEmailMode(): EmailMode {
+  return parseEmailMode(process.env.EMAIL_MODE);
 }
 
 export function getEmailProvider(): EmailProvider {

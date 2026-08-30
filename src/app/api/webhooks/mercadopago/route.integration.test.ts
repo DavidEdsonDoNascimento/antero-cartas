@@ -190,9 +190,16 @@ describe.skipIf(!RUN)(
       expect(created.status).toBe("PENDING");
 
       mpPayment.value = {
+        providerPaymentId: PAYMENT_ID,
         status: "approved",
         statusDetail: "accredited",
         externalReference: orderId,
+        // Plano LIMITED (ver `getPlan("LIMITED")` mais abaixo): preço em
+        // reais batendo com `Order.amount` em centavos (1890 = R$18,90).
+        transactionAmount: getPlan("LIMITED").priceCents / 100,
+        currencyId: "BRL",
+        paymentMethodId: "pix",
+        paymentTypeId: "bank_transfer",
       };
 
       // --- Primeira entrega: o pagamento é aprovado ---

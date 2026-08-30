@@ -12,10 +12,25 @@ export interface CartPublishedEmailInput {
   expiresAt: string | null;
 }
 
+/**
+ * Imagem embarcada por CID — o Resend real não aceita `data:` URL inline no
+ * HTML, então o QR Code precisa viajar como anexo referenciado por
+ * `content_id` (o mesmo id usado em `cid:` dentro do HTML). `content` é
+ * SEMPRE só o Base64 do arquivo, sem o prefixo `data:image/png;base64,`.
+ */
+export interface EmailAttachment {
+  filename: string;
+  content: string;
+  contentType: string;
+  contentId: string;
+}
+
 export interface RenderedEmail {
   subject: string;
   html: string;
   text: string;
+  /** Vazio quando não há QR Code (ausente ou malformado) — nunca um anexo vazio. */
+  attachments: EmailAttachment[];
 }
 
 export interface EmailProvider {
