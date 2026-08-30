@@ -13,7 +13,7 @@ import { ALLOWED_IMAGE_MIME, extensionForMime, sniffImageMime } from "@/lib/imag
 import { getStorage } from "@/server/storage";
 import { ApiError } from "@/server/errors";
 import type { DraftUpdateInput } from "@/server/schemas";
-import type { Cart } from "@/lib/types";
+import type { Cart, PlanType } from "@/lib/types";
 
 const EDITABLE_STATUSES = new Set(["DRAFT", "AWAITING_PAYMENT"]);
 const cartInclude = { media: { orderBy: { position: "asc" as const } } };
@@ -257,11 +257,21 @@ async function uniqueSlug(db: Db): Promise<string> {
  * Publica a carta (idempotente). Chamada dentro da transação de confirmação
  * de pagamento (orderService), recebendo `tx` para que pedido+publicação
  * sejam atômicos. Aceita também o client normal fora de transação.
+ *
+ * `planType` é o plano do **pedido efetivamente pago** (`Order.planType`),
+ * nunca `Cart.planType` lido do banco: a Cart é editável em
+ * `AWAITING_PAYMENT` (o comprador pode voltar e trocar de plano com uma
+ * cobrança já aberta), então `Cart.planType` pode divergir do que foi
+ * realmente cobrado no pedido que está sendo finalizado. O pedido pago é o
+ * contrato — é dele que vem a duração, e a Cart é reconciliada com esse
+ * valor na mesma escrita (auditoria de 2026-08-30: duração entregue não
+ * seguia o plano pago).
  */
 export async function publishCartWithClient(
   db: Db,
   cartId: string,
   paidAt: Date,
+  planType: PlanType,
 ): Promise<DbCartRow> {
   const row = (await db.cart.findUnique({
     where: { id: cartId },
@@ -273,11 +283,11 @@ export async function publishCartWithClient(
   assertPublishable(row);
 
   const slug = row.slug ?? (await uniqueSlug(db));
-  const expiresAt = computeExpiresAt(row.planType as "LIMITED" | "PERMANENT", paidAt);
+  const expiresAt = computeExpiresAt(planType, paidAt);
 
   await db.cart.update({
     where: { id: cartId },
-    data: { status: "PUBLISHED", slug, publishedAt: paidAt, expiresAt },
+    data: { status: "PUBLISHED", slug, publishedAt: paidAt, expiresAt, planType },
   });
   return (await db.cart.findUnique({
     where: { id: cartId },
@@ -286,8 +296,8 @@ export async function publishCartWithClient(
 }
 
 /** Publica fora de uma transação (uso avulso/testes). */
-export async function publishCart(cartId: string, paidAt: Date): Promise<DbCartRow> {
-  return publishCartWithClient(prisma, cartId, paidAt);
+export async function publishCart(cartId: string, paidAt: Date, planType: PlanType): Promise<DbCartRow> {
+  return publishCartWithClient(prisma, cartId, paidAt, planType);
 }
 
 // --- Rota pública ----------------------------------------------------------

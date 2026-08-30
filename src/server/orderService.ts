@@ -26,7 +26,7 @@ import { getEmailProvider } from "@/server/email";
 import { generateQrDataUrl } from "@/server/qrcode";
 import { verifyEditToken } from "@/lib/editToken";
 import type { CreateOrderInput } from "@/server/schemas";
-import type { Cart } from "@/lib/types";
+import type { Cart, PlanType } from "@/lib/types";
 
 const cartInclude = { media: { orderBy: { position: "asc" as const } } };
 
@@ -1015,12 +1015,18 @@ export async function mockConfirmOrder(
  * Pago já reenvia sozinho em caso de 500; ver route.ts), sem cobrança
  * perdida nem carta meio publicada. O e-mail continua fora da transação, de
  * propósito: só deve ser disparado depois que o commit acima for definitivo.
+ *
+ * `order.planType` é repassado a `publishCartWithClient` como a fonte de
+ * verdade da duração — nunca `Cart.planType`, que é editável enquanto a
+ * carta está em `AWAITING_PAYMENT` e pode divergir do plano deste pedido
+ * (auditoria de 2026-08-30: duração entregue não seguia o plano pago).
  */
 async function finalizeOrderAsPaid(order: {
   id: string;
   cartId: string;
   customerName: string;
   customerEmail: string;
+  planType: PlanType;
 }): Promise<false | { cart: Cart; publicUrl: string; qrCodeDataUrl: string | null }> {
   const now = new Date();
 
@@ -1030,7 +1036,7 @@ async function finalizeOrderAsPaid(order: {
       data: { status: "PAID", paidAt: now },
     });
     if (claim.count === 0) return null;
-    return publishCartWithClient(tx, order.cartId, now);
+    return publishCartWithClient(tx, order.cartId, now, order.planType);
   });
   if (!publishedRow) return false;
 
