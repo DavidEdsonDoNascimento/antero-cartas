@@ -33,6 +33,30 @@
 :root {
   --background: var(--color-creme);
   --foreground: var(--color-grafite);
+
+  /* --------------------------------------------------------------------------
+     FAB "Ver preview" da jornada de criação (mobile, some em lg:).
+     O botão é `position: fixed`, então NÃO empurra o conteúdo. Sem reservar
+     espaço, a última linha do formulário — o CTA "Finalizar minha cartinha" /
+     "Próxima etapa" — para embaixo dele quando a página chega ao fim e fica
+     coberta. As duas medidas abaixo são derivadas da geometria real do botão,
+     não números soltos:
+
+       --preview-fab-inset  = distância entre o botão e a borda inferior
+                              (Tailwind `bottom-4` = 1rem) + área segura.
+       altura do botão      = `py-3` (2 × 0.75rem) + line-height do `text-sm`
+                              (1.25rem) = 2.75rem.
+       respiro              = 1rem de folga visível entre o botão e o CTA.
+
+     `--preview-fab-reserve` (inset + altura + respiro) é o padding-bottom que
+     o conteúdo da jornada passa a ter no mobile; o mesmo `--preview-fab-inset`
+     posiciona o próprio botão, então os dois nunca saem de sincronia.
+
+     env(safe-area-inset-bottom) vale 0 hoje (viewport padrão, sem
+     viewport-fit=cover); entra sozinho no cálculo se o site adotar a área
+     segura no futuro. */
+  --preview-fab-inset: calc(1rem + env(safe-area-inset-bottom, 0px));
+  --preview-fab-reserve: calc(var(--preview-fab-inset) + 2.75rem + 1rem);
 }
 
 html {

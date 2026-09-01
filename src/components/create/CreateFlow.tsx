@@ -225,7 +225,7 @@ export function CreateFlow() {
   }
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-8 px-4 py-8 lg:grid-cols-[1fr_minmax(320px,420px)] lg:py-12">
+    <div className="mx-auto grid max-w-6xl gap-8 px-4 pt-8 pb-[var(--preview-fab-reserve)] lg:grid-cols-[1fr_minmax(320px,420px)] lg:py-12">
       {/* Formulário */}
       <div className="min-w-0">
         <div className="mb-4 flex items-center justify-between">
@@ -299,10 +299,13 @@ export function CreateFlow() {
         </div>
       </aside>
 
-      {/* Preview mobile (botão + drawer) */}
+      {/* Preview mobile (botão + drawer). O padding-bottom do container acima
+          (`--preview-fab-reserve`) reserva a faixa que este botão ocupa, para
+          ele nunca cobrir o CTA final. `bottom` usa o mesmo `--preview-fab-inset`
+          que entra naquele cálculo. */}
       <button
         onClick={() => setShowMobilePreview(true)}
-        className="fixed bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full bg-vinho px-6 py-3 text-sm font-semibold text-creme shadow-lg lg:hidden"
+        className="fixed bottom-[var(--preview-fab-inset)] left-1/2 z-30 -translate-x-1/2 rounded-full bg-vinho px-6 py-3 text-sm font-semibold text-creme shadow-lg lg:hidden"
       >
         👁️ Ver preview
       </button>
