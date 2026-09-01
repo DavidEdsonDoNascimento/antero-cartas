@@ -54,6 +54,7 @@ documento.
 |---|---|---|---|---|---|---|
 | 014 | Cobrança aberta e retomada do Pix | `DEFERRED` | `MÉDIA` | Priorizar refinamento visual e validação comercial da V1; o risco exige uma sequência incomum e tem contorno manual | Antes de anunciar; primeiras 10 vendas; relato de cobrança duplicada; antes do upgrade de plano; antes de aumentar tráfego | [`014_cobranca_aberta_e_retomada_pix.md`](014_cobranca_aberta_e_retomada_pix.md) |
 | 015 | Limpeza de fotos após expiração | `DEFERRED` | `MÉDIA` | Nenhuma cartinha do Essencial chega perto de 365 dias no curto prazo | Antes de a primeira cartinha do Essencial se aproximar dos 365 dias; ou antes, se custo/privacidade/volume de Storage pesarem | [`015_limpeza_de_fotos_apos_expiracao.md`](015_limpeza_de_fotos_apos_expiracao.md) |
+| 016 | Revisão visual V1 | `IN_PROGRESS` | `ALTA` | — (não é uma tarefa adiada; é o roteiro em execução da fase visual, com checklist de PRs) | PR 1 concluído; retomar ao iniciar o PR 2 ou o PR 3 | [`016_revisao_visual_v1.md`](016_revisao_visual_v1.md) |
 
 > **Atenção:** a tarefa 014 contém uma subtarefa de prioridade **ALTA** —
 > corrigir a regra que derruba a cartinha quando uma cobrança duplicada é
