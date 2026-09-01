@@ -14,13 +14,17 @@ import type { CartMedia } from "@/lib/types";
 export function PhotoCarousel({
   media,
   accent,
+  mutedColor,
   frame = "tape",
   tilt = -1.5,
   autoAdvance = false,
   interval = 3000,
 }: {
   media: CartMedia[];
+  /** Cor do indicador ativo — precisa ser um tom já verificado contra `cardBg` (≥3:1; ver `ThemeConfig.accentOnCard`). */
   accent: string;
+  /** Cor do indicador inativo — precisa ser um tom já verificado contra `cardBg` (≥3:1; ver `ThemeConfig.inkMuted`). */
+  mutedColor: string;
   frame?: "tape" | "clean";
   tilt?: number;
   /** Passa as fotos sozinho (usado na carta pronta e na demonstração). */
@@ -142,21 +146,29 @@ export function PhotoCarousel({
       </div>
 
       {!single && (
-        <div className="mt-3 flex justify-center gap-1.5" aria-hidden="false">
+        <div className="mt-3 flex justify-center gap-1" aria-hidden="false">
           {media.map((m, i) => (
+            // O botão inteiro é o alvo de toque (24×24, mínimo WCAG 2.2 2.5.8);
+            // o indicador visual continua pequeno dentro dele — os dois
+            // precisam de tamanhos diferentes, então o dot vira um <span>
+            // decorativo centralizado, não o próprio botão.
             <button
               key={m.id}
               type="button"
               onClick={() => go(i)}
               aria-label={`Ir para a foto ${i + 1}`}
               aria-current={i === safeIndex}
-              className="h-2 rounded-full transition-all"
-              style={{
-                width: i === safeIndex ? 20 : 8,
-                background:
-                  i === safeIndex ? accent : "color-mix(in srgb, currentColor 25%, transparent)",
-              }}
-            />
+              className="flex h-6 w-6 items-center justify-center rounded-full"
+            >
+              <span
+                aria-hidden
+                className="h-2 rounded-full transition-all"
+                style={{
+                  width: i === safeIndex ? 20 : 8,
+                  background: i === safeIndex ? accent : mutedColor,
+                }}
+              />
+            </button>
           ))}
         </div>
       )}
