@@ -47,12 +47,22 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Títulos usam a serifada elegante por padrão */
-h1,
-h2,
-h3,
-h4 {
-  font-family: var(--font-serif);
+/* Títulos usam a serifada elegante por padrão. Em `@layer base` (não solto
+   no arquivo) de propósito: no Tailwind v4 CSS solto vence QUALQUER classe
+   utilitária, inclusive `.font-script` (que vive em `@layer utilities`),
+   porque a ordem das camadas decide antes da especificidade. Fora de layer,
+   `<h3 className="font-script">` nunca conseguia trocar a fonte do título da
+   carta — o tema "Romântico"/"Delicado" declarava heading: "script" sem
+   efeito nenhum. Dentro de `@layer base`, a cascata do próprio Tailwind
+   resolve isso sem precisar de !important (utilities é declarada depois de
+   base — ver auditoria visual, PR 1, docs/tasks-pending/016_revisao_visual_v1.md). */
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-serif);
+  }
 }
 
 /* Foco acessível e visível */
