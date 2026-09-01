@@ -49,7 +49,10 @@ function ClosedEnvelope({
 }) {
   return (
     <div className="flex flex-col items-center text-center">
-      <p className="mb-8 max-w-xs text-sm font-medium uppercase tracking-widest text-white/70">
+      <p
+        className="mb-8 max-w-xs text-sm font-medium uppercase tracking-widest"
+        style={{ color: theme.onEnvelopeMuted }}
+      >
         Uma surpresa foi preparada para você
       </p>
 
@@ -63,32 +66,39 @@ function ClosedEnvelope({
           className="absolute inset-0 rounded-lg shadow-2xl"
           style={{ background: theme.cardBg }}
         />
-        {/* Aba do envelope */}
+        {/* Aba do envelope — 50% (não 82%): a dobra precisa se distinguir do
+            corpo do envelope com ≥3:1 (não-textual); 82% rendia ~1,5:1 em
+            todos os temas, a dobra ficava praticamente invisível. */}
         <div
           className="absolute inset-x-0 top-0 origin-top transition-transform duration-500 group-hover:-translate-y-1"
           style={{
             height: "60%",
             clipPath: "polygon(0 0, 100% 0, 50% 100%)",
-            background: `color-mix(in srgb, ${theme.cardBg} 82%, black)`,
+            background: `color-mix(in srgb, ${theme.cardBg} 50%, black)`,
           }}
         />
         {/* Selo do tema */}
         <div
           className="absolute left-1/2 top-[52%] flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full text-lg shadow-lg"
-          style={{ background: theme.accent, color: theme.envelopeBg }}
+          style={{ background: theme.accent, color: theme.onAccent }}
         >
           {theme.seal}
         </div>
       </button>
 
       {recipient && (
-        <p className="mt-8 font-script text-3xl text-white sm:text-4xl">{recipient}</p>
+        <p
+          className="mt-8 font-script text-3xl sm:text-4xl"
+          style={{ color: theme.onEnvelope }}
+        >
+          {recipient}
+        </p>
       )}
 
       <button
         onClick={onOpen}
         className="mt-6 rounded-full px-8 py-3 text-sm font-semibold shadow-lg transition hover:scale-105"
-        style={{ background: theme.accent, color: theme.envelopeBg }}
+        style={{ background: theme.accent, color: theme.onAccent }}
       >
         Abrir minha carta {theme.seal}
       </button>
@@ -127,7 +137,11 @@ function OpenCardMusic({ music }: { music: SelectedMusic }) {
   const [playing, setPlaying] = useState(true);
 
   return (
-    <div className="mt-4 rounded-xl bg-black/25 p-3">
+    // bg-black/55 (não /25): um véu escuro FIXO, não relativo ao envelopeBg —
+    // funciona igual em temas com envelope claro (Delicado) ou escuro. O
+    // texto branco continua legível porque o preto sempre escurece o que
+    // está atrás, qualquer que seja a cor de base do tema.
+    <div className="mt-4 rounded-xl bg-black/55 p-3">
       <div className="flex items-center justify-between gap-3 text-xs text-white/85">
         <span className="min-w-0 truncate">
           🎵 {music.title ?? "Música da cartinha"}
@@ -152,7 +166,7 @@ function OpenCardMusic({ music }: { music: SelectedMusic }) {
           />
         </div>
       )}
-      <p className="mt-2 text-center text-[11px] text-white/55">
+      <p className="mt-2 text-center text-[11px] text-white/70">
         A reprodução depende da disponibilidade do vídeo no YouTube.{" "}
         <a
           href={music.youtubeUrl}

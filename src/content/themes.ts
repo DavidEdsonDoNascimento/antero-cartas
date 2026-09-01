@@ -17,6 +17,27 @@ export interface ThemeConfig {
   accent: string;
   swatch: [string, string];
 
+  /**
+   * Cores derivadas para pares específicos (auditoria visual, PR 1 —
+   * `docs/tasks-pending/016_revisao_visual_v1.md`). `envelopeBg`, `ink` e
+   * `accent` sozinhos não garantem contraste em todo par onde aparecem — por
+   * isso cada combinação crítica ganha seu próprio campo, validado em
+   * `src/content/themes.test.ts`. Nenhum destes campos existia antes desta
+   * auditoria; a UI reaproveitava `envelopeBg`/`accent`/opacidade de `ink`
+   * como cor de texto, o que produzia razões abaixo de 4,5:1 em vários
+   * temas (o Delicado chegava a 1,08:1 no botão "Abrir minha carta").
+   */
+  /** Texto/elemento de destaque direto sobre `envelopeBg` (ex.: nome do destinatário). Mín. 3:1 (texto grande). */
+  onEnvelope: string;
+  /** Texto secundário direto sobre `envelopeBg` (ex.: "Uma surpresa foi preparada..."). Mín. 4,5:1. */
+  onEnvelopeMuted: string;
+  /** Texto/glifo sobre `accent` (botão "Abrir minha carta", selo do envelope). Mín. 4,5:1. */
+  onAccent: string;
+  /** Uso decorativo de `accent` direto sobre `cardBg` (ornamento, divisor, indicador ativo do carrossel). Mín. 3:1. */
+  accentOnCard: string;
+  /** Texto secundário sobre `cardBg` (linha "Para X", assinatura, contador, canal da música). Mín. 4,5:1. */
+  inkMuted: string;
+
   /** Tipografia do título da carta. */
   heading: "script" | "serif";
   /** Fundo do papel. */
@@ -45,6 +66,11 @@ export const themes: ThemeConfig[] = [
     ink: "#681d35",
     accent: "#c6a15b",
     swatch: ["#681d35", "#d98c9f"],
+    onEnvelope: "#ffffff",
+    onEnvelopeMuted: "#d3c5c9",
+    onAccent: "#4e1528",
+    accentOnCard: "#8a6a2f",
+    inkMuted: "#8e5465",
     heading: "script",
     paper: "lines",
     photoFrame: "tape",
@@ -64,6 +90,11 @@ export const themes: ThemeConfig[] = [
     ink: "#26211f",
     accent: "#c6a15b",
     swatch: ["#211d1e", "#c6a15b"],
+    onEnvelope: "#ffffff",
+    onEnvelopeMuted: "#c8c7c7",
+    onAccent: "#211d1e",
+    accentOnCard: "#8a6a2f",
+    inkMuted: "#5b5754",
     heading: "serif",
     paper: "plain",
     photoFrame: "clean",
@@ -81,8 +112,18 @@ export const themes: ThemeConfig[] = [
     envelopeBg: "#d98c9f",
     cardBg: "#fffdfb",
     ink: "#8a4256",
-    accent: "#c98aa0",
+    // Ajustado de #c98aa0 (auditoria visual): era claro demais sobre um
+    // envelopeBg também claro — o par accent/envelopeBg do botão "Abrir
+    // minha carta" chegava a 1,08:1. #7a3549 é a mesma família de vinho/rosa
+    // (mantém a identidade "rosa suave" do tema, que continua sendo o único
+    // com envelope claro) com contraste suficiente como fundo de botão.
+    accent: "#7a3549",
     swatch: ["#d98c9f", "#f3dfe4"],
+    onEnvelope: "#3f1a25",
+    onEnvelopeMuted: "#3f1a25",
+    onAccent: "#ffffff",
+    accentOnCard: "#7a3549",
+    inkMuted: "#8a4256",
     heading: "script",
     paper: "dots",
     photoFrame: "tape",
@@ -102,6 +143,11 @@ export const themes: ThemeConfig[] = [
     ink: "#681d35",
     accent: "#c6a15b",
     swatch: ["#681d35", "#c6a15b"],
+    onEnvelope: "#ffffff",
+    onEnvelopeMuted: "#d6c6cb",
+    onAccent: "#5a1a30",
+    accentOnCard: "#8a6a2f",
+    inkMuted: "#8e5464",
     heading: "serif",
     paper: "lines",
     photoFrame: "tape",

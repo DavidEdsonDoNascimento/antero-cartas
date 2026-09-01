@@ -46,7 +46,11 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
       >
         {/* Título com ornamento do tema */}
         <div className="flex items-start gap-2">
-          <span aria-hidden className="mt-1 shrink-0 text-lg" style={{ color: theme.accent }}>
+          <span
+            aria-hidden
+            className="mt-1 shrink-0 text-lg"
+            style={{ color: theme.accentOnCard }}
+          >
             {theme.ornament}
           </span>
           <h3 className={headingClass} style={{ color: theme.ink }}>
@@ -55,7 +59,9 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
         </div>
 
         {recipientName && (
-          <p className="mt-1 pl-7 text-sm opacity-70">Para {recipientName}</p>
+          <p className="mt-1 pl-7 text-sm" style={{ color: theme.inkMuted }}>
+            Para {recipientName}
+          </p>
         )}
 
         {/* Fotos em carrossel */}
@@ -63,7 +69,8 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
           <div className="mt-6">
             <PhotoCarousel
               media={cart.media}
-              accent={theme.accent}
+              accent={theme.accentOnCard}
+              mutedColor={theme.inkMuted}
               frame={theme.photoFrame}
               tilt={theme.tilt}
               autoAdvance={!live}
@@ -85,9 +92,9 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
             className="mt-6 rounded-lg px-4 py-3 text-center text-sm"
             style={{ background: `${theme.accent}22`, color: theme.ink }}
           >
-            <span className="opacity-70">Juntos há </span>
+            <span style={{ color: theme.inkMuted }}>Juntos há </span>
             <strong>{formatTimeTogether(counter)}</strong>
-            <div className="mt-0.5 text-xs opacity-60">
+            <div className="mt-0.5 text-xs" style={{ color: theme.inkMuted }}>
               {counter.hours}h {counter.minutes}min {counter.seconds}s
             </div>
           </div>
@@ -98,7 +105,7 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
           <div
             aria-hidden
             className="mt-6 text-center text-sm tracking-[0.3em]"
-            style={{ color: theme.accent }}
+            style={{ color: theme.accentOnCard }}
           >
             {theme.divider}
           </div>
@@ -108,7 +115,9 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
         {(cart.senderName.trim() || cart.signature.trim()) && (
           <div className="mt-3 text-right">
             {cart.signature.trim() && (
-              <p className="text-sm italic opacity-75">{cart.signature.trim()}</p>
+              <p className="text-sm italic" style={{ color: theme.inkMuted }}>
+                {cart.signature.trim()}
+              </p>
             )}
             {cart.senderName.trim() && (
               <p className="font-script text-2xl" style={{ color: theme.ink }}>
@@ -133,7 +142,7 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
               <p className="truncate font-medium">
                 🎵 {cart.music.title ?? "Música adicionada"}
               </p>
-              <p className="truncate opacity-60">
+              <p className="truncate" style={{ color: theme.inkMuted }}>
                 {cart.music.channelTitle
                   ? cart.music.channelTitle
                   : live
