@@ -65,11 +65,25 @@ body {
   }
 }
 
-/* Foco acessível e visível */
+/* Foco acessível e visível — halo de duas cores, não uma cor só.
+   `--color-dourado` sozinho falha contra metade das superfícies do site
+   (2,3:1 sobre creme/branco; 1,0:1 sobre um botão dourado) porque nenhuma
+   cor única atinge 3:1 contra fundos claros E escuros ao mesmo tempo. O anel
+   interno branco (`--color-branco`) cobre as superfícies escuras (vinho, os
+   três envelopes escuros); o anel externo `--color-vinho-deep` cobre as
+   claras (creme, branco, dourado, o envelope claro do tema Delicado) — para
+   qualquer fundo, pelo menos um dos dois ronda ≥3:1 (validado nos 8 fundos
+   usados no produto: min. 4,71:1). `outline` continua presente — transparente
+   por padrão, mas com `outline-style` "solid" para o modo de alto contraste
+   do Windows continuar desenhando algo mesmo quando cores customizadas são
+   ignoradas. */
 :where(a, button, input, textarea, select, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-dourado);
+  outline: 2px solid transparent;
   outline-offset: 2px;
   border-radius: 4px;
+  box-shadow:
+    0 0 0 2px var(--color-branco),
+    0 0 0 4px var(--color-vinho-deep);
 }
 
 /* ==========================================================================
