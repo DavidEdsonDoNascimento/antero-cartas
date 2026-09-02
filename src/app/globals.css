@@ -57,6 +57,18 @@
      segura no futuro. */
   --preview-fab-inset: calc(1rem + env(safe-area-inset-bottom, 0px));
   --preview-fab-reserve: calc(var(--preview-fab-inset) + 2.75rem + 1rem);
+
+  /* --------------------------------------------------------------------------
+     Selo de criação e indicador de música flutuantes na cartinha pública
+     (mobile; `lg:hidden`). Mesma lógica do FAB "Ver preview": recuo = 1rem +
+     área segura. `env(safe-area-inset-*)` vale 0 hoje (sem viewport-fit=cover)
+     e entra sozinho se o site adotar depois. Diferente do FAB, estes elementos
+     NÃO precisam de reserva de espaço no conteúdo: a raiz de CardExperience é
+     centralizada (`justify-center`) e o selo some quando o bloco final aparece
+     (IntersectionObserver), então nunca cobre o CTA final de forma persistente. */
+  --card-float-inset-b: calc(1rem + env(safe-area-inset-bottom, 0px));
+  --card-float-inset-l: calc(1rem + env(safe-area-inset-left, 0px));
+  --card-float-inset-r: calc(1rem + env(safe-area-inset-right, 0px));
 }
 
 html {
@@ -192,6 +204,23 @@ body {
   animation: gentle-float 3.2s ease-in-out infinite;
 }
 
+/* Pulso ÚNICO de atenção do indicador de música (nunca em loop: o código não
+   confirma que a música está tocando — ver CardMusicBadge). `iteration-count`
+   explícito = 1; a regra de prefers-reduced-motion abaixo já zera isto. */
+@keyframes music-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.06);
+  }
+}
+
+.animate-music-pulse {
+  animation: music-pulse 1.1s var(--ease-emotional) 1 both;
+}
+
 /* Respeita quem prefere menos movimento */
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -203,5 +232,16 @@ body {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* Paisagem baixa: o selo e o indicador flutuantes da cartinha pública
+   cobririam o envelope e o botão "Abrir minha carta". Ocultos aqui — o selo e
+   o aviso de música inline (visíveis só em `lg:` no fluxo normal) não entram
+   nesta faixa, mas o conteúdo continua todo acessível pela rolagem. CSS fora
+   de `@layer` vence as utilities do Tailwind (`fixed`, `lg:hidden`). */
+@media (max-height: 480px) and (orientation: landscape) {
+  .card-float-dock {
+    display: none;
   }
 }

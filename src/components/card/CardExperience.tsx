@@ -5,6 +5,9 @@ import type { Cart } from "@/lib/types";
 import { getTheme } from "@/content/themes";
 import { CardPreview } from "@/components/card/CardPreview";
 import { CardCreateInvite } from "@/components/card/CardCreateInvite";
+import { CardCreateSeal } from "@/components/card/CardCreateSeal";
+import { CardMusicBadge } from "@/components/card/CardMusicBadge";
+import { CardFloatingActions } from "@/components/card/CardFloatingActions";
 import { youTubeEmbedUrl } from "@/lib/youtube";
 import { whatsappShareUrl } from "@/lib/whatsapp";
 import type { SelectedMusic } from "@/lib/types";
@@ -31,10 +34,19 @@ export function CardExperience({ cart, shareUrl }: { cart: Cart; shareUrl: strin
       style={{ background: theme.envelopeBg }}
     >
       {!opened ? (
-        <ClosedEnvelope recipient={recipient} theme={theme} onOpen={handleOpen} />
+        <ClosedEnvelope
+          recipient={recipient}
+          theme={theme}
+          hasMusic={!!cart.music}
+          onOpen={handleOpen}
+        />
       ) : (
         <OpenedLetter cart={cart} shareUrl={shareUrl} />
       )}
+
+      {/* Filho DIRETO da raiz — nunca dentro dos blocos acima — para que
+          `position: fixed` seja relativo à viewport (ver CardFloatingActions). */}
+      <CardFloatingActions opened={opened} hasMusic={!!cart.music} theme={theme} />
     </div>
   );
 }
@@ -42,10 +54,12 @@ export function CardExperience({ cart, shareUrl }: { cart: Cart; shareUrl: strin
 function ClosedEnvelope({
   recipient,
   theme,
+  hasMusic,
   onOpen,
 }: {
   recipient: string;
   theme: ReturnType<typeof getTheme>;
+  hasMusic: boolean;
   onOpen: () => void;
 }) {
   return (
@@ -56,6 +70,15 @@ function ClosedEnvelope({
       >
         Uma surpresa foi preparada para você
       </p>
+
+      {/* Aviso de música no desktop (no mobile é o badge flutuante). O wrapper
+          controla a visibilidade responsiva — `hidden`/`lg:block` num <div> não
+          colide com o `display` do próprio badge. */}
+      {hasMusic && (
+        <div className="mb-6 hidden lg:block">
+          <CardMusicBadge theme={theme} state="closed" />
+        </div>
+      )}
 
       {/* Envelope */}
       <button
@@ -104,9 +127,13 @@ function ClosedEnvelope({
         Abrir minha carta {theme.seal}
       </button>
 
-      {/* Convite secundário — deliberadamente depois e abaixo do botão de
-          abrir, que continua sendo a única ação principal desta tela. */}
-      <CardCreateInvite variant="discreta" theme={theme} />
+      {/* Selo de criação — no mobile é flutuante (CardFloatingActions); aqui,
+          inline no desktop, depois e abaixo do botão de abrir, que continua
+          sendo a única ação principal desta tela. O wrapper faz a visibilidade
+          responsiva (não colide com o `display` do selo). */}
+      <div className="mt-10 hidden lg:block">
+        <CardCreateSeal theme={theme} state="closed" />
+      </div>
     </div>
   );
 }
@@ -138,7 +165,7 @@ function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
       {/* Fora do contêiner de ações acima: compartilhar é para quem RECEBEU a
           cartinha, criar é para quem só passou por ela. Ações diferentes, com
           públicos diferentes, não podem ter o mesmo peso visual. */}
-      <CardCreateInvite variant="destaque" theme={theme} />
+      <CardCreateInvite theme={theme} />
     </div>
   );
 }
@@ -154,7 +181,7 @@ function OpenCardMusic({ music }: { music: SelectedMusic }) {
     // funciona igual em temas com envelope claro (Delicado) ou escuro. O
     // texto branco continua legível porque o preto sempre escurece o que
     // está atrás, qualquer que seja a cor de base do tema.
-    <div className="mt-4 rounded-xl bg-black/55 p-3">
+    <div id="musica-da-cartinha" className="mt-4 scroll-mt-4 rounded-xl bg-black/55 p-3">
       <div className="flex items-center justify-between gap-3 text-xs text-white/85">
         <span className="min-w-0 truncate">
           🎵 {music.title ?? "Música da cartinha"}

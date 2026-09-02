@@ -1,19 +1,21 @@
 // @vitest-environment jsdom
 /**
- * Integração do convite dentro da experiência da cartinha pública.
+ * Integração do selo de criação e do indicador de música dentro da experiência
+ * da cartinha pública.
  *
- * O teste isolado do componente (CardCreateInvite.test.tsx) prova que o
- * convite se comporta. Aqui provamos as três coisas que só aparecem quando
- * ele está montado na cartinha de verdade:
+ * Os testes isolados (`CardCreateInvite.test.tsx`, `cardFloatingActions.test.tsx`)
+ * provam o comportamento dos componentes. Aqui provamos o que só aparece quando
+ * eles estão montados na cartinha de verdade:
  *
- * 1. O convite do estado fechado NÃO abre o envelope. É a regra que sustenta
- *    a hierarquia inteira — se clicar nele abrisse a carta, ele teria virado
- *    um segundo botão de abrir, disfarçado de link.
- * 2. O bloco final vem DEPOIS da ação de compartilhar e FORA do contêiner
- *    dela. Compartilhar é para quem recebeu a cartinha; criar é para quem só
- *    passou por ela.
- * 3. Nenhum dado da cartinha exibida chega ao CTA. A cartinha usada abaixo é
- *    recheada de sentinelas justamente para que qualquer vazamento apareça.
+ * 1. O selo do estado fechado NÃO abre o envelope. Se clicar nele abrisse a
+ *    carta, ele teria virado um segundo botão de abrir, disfarçado de link.
+ * 2. O bloco final vem DEPOIS da ação de compartilhar e FORA do contêiner dela.
+ * 3. Os flutuantes são filhos DIRETOS da raiz — nunca dentro do `.animate-fade-up`
+ *    do `OpenedLetter`, cujas keyframes de `translateY` criariam containing block
+ *    e prenderiam o `position: fixed`.
+ * 4. Nenhum dado da cartinha exibida chega ao selo ou ao bloco final. A cartinha
+ *    é recheada de sentinelas para que qualquer vazamento apareça.
+ * 5. O indicador de música só existe quando há música, e leva ao player.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -24,8 +26,8 @@ import { CardExperience } from "./CardExperience";
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 
 /**
- * Valores propositalmente distintos e improváveis: se algum deles aparecer no
- * CTA, é vazamento — não coincidência.
+ * Valores propositalmente distintos e improváveis: se algum deles aparecer nos
+ * CTAs, é vazamento — não coincidência.
  */
 const SENTINELAS = {
   recipientName: "Marifernanda Zaltron",
@@ -89,11 +91,19 @@ function render(cart: Cart = CART) {
   });
 }
 
-/** O CTA de criação, identificado pelo destino — nunca pelo texto. */
-function cta(): HTMLAnchorElement {
+/** Primeiro caminho para /criar (o helper histórico — qualquer um serve). */
+function anyCreateLink(): HTMLAnchorElement {
   const found = container.querySelector<HTMLAnchorElement>('a[href="/criar"]');
-  expect(found, "CTA para /criar não encontrado").not.toBeNull();
+  expect(found, "nenhum caminho para /criar encontrado").not.toBeNull();
   return found!;
+}
+
+function createLinks(): HTMLAnchorElement[] {
+  return Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="/criar"]'));
+}
+
+function finalBlock(): HTMLElement | null {
+  return container.querySelector<HTMLElement>("#card-final-cta");
 }
 
 function openButton(): HTMLButtonElement {
@@ -107,18 +117,31 @@ function openButton(): HTMLButtonElement {
 const isOpen = () => container.textContent?.includes(SENTINELAS.message) ?? false;
 
 describe("estado fechado", () => {
-  it("mostra o convite discreto com link para /criar", () => {
+  it("mostra o selo (link para /criar) e NÃO o bloco final", () => {
     render();
     expect(isOpen()).toBe(false);
-    expect(container.textContent).toContain("Quer criar uma surpresa assim?");
-    expect(cta().textContent).toBe("Criar uma cartinha");
+    expect(anyCreateLink().getAttribute("href")).toBe("/criar");
+    expect(finalBlock()).toBeNull();
   });
 
-  it("o convite NÃO abre o envelope quando clicado", () => {
+  it("todo caminho para /criar no estado fechado é um selo", () => {
     render();
-    act(() => cta().click());
+    const links = createLinks();
+    expect(links.length).toBeGreaterThan(0);
+    for (const a of links) {
+      expect(a.getAttribute("aria-label")).toBe("Criar a minha cartinha");
+    }
+  });
+
+  it("o convite textual antigo não aparece mais", () => {
+    render();
+    expect(container.textContent).not.toContain("Quer criar uma surpresa assim?");
+  });
+
+  it("o selo NÃO abre o envelope quando clicado", () => {
+    render();
+    act(() => anyCreateLink().click());
     expect(isOpen()).toBe(false);
-    // e o envelope continua lá, esperando a ação principal
     expect(container.textContent).toContain("Uma surpresa foi preparada para você");
   });
 
@@ -128,15 +151,10 @@ describe("estado fechado", () => {
     expect(isOpen()).toBe(true);
   });
 
-  it("o convite vem depois do botão de abrir, na ordem do documento", () => {
+  it("o selo vem depois do botão de abrir, na ordem do documento", () => {
     render();
-    const posicao = openButton().compareDocumentPosition(cta());
+    const posicao = openButton().compareDocumentPosition(anyCreateLink());
     expect(posicao & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it("existe exatamente um caminho para /criar", () => {
-    render();
-    expect(container.querySelectorAll('a[href="/criar"]')).toHaveLength(1);
   });
 });
 
@@ -146,37 +164,49 @@ describe("estado aberto", () => {
     act(() => openButton().click());
   });
 
-  it("mostra o bloco de conversão com link para /criar", () => {
+  it("mostra o bloco de conversão (#card-final-cta) com link para /criar", () => {
     expect(isOpen()).toBe(true);
+    expect(finalBlock()).not.toBeNull();
     expect(container.textContent).toContain("Gostou desta surpresa? 💌");
-    expect(container.textContent).toContain(
-      "Crie uma cartinha para alguém especial em poucos minutos.",
+    expect(finalBlock()!.querySelector('a[href="/criar"]')?.textContent).toBe(
+      "Criar minha cartinha",
     );
-    expect(cta().textContent).toBe("Criar minha cartinha");
   });
 
-  it("o bloco fica DEPOIS da ação de compartilhar no WhatsApp", () => {
+  it("o bloco final fica DEPOIS da ação de compartilhar no WhatsApp", () => {
     const whatsapp = container.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
     expect(whatsapp).not.toBeNull();
-    const posicao = whatsapp!.compareDocumentPosition(cta());
+    const posicao = whatsapp!.compareDocumentPosition(finalBlock()!);
     expect(posicao & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("o bloco fica FORA do contêiner de ações do WhatsApp", () => {
+  it("o bloco final fica FORA do contêiner de ações do WhatsApp", () => {
     const whatsapp = container.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
-    expect(whatsapp!.parentElement!.contains(cta())).toBe(false);
+    expect(whatsapp!.parentElement!.contains(finalBlock())).toBe(false);
   });
 
-  it("não sobrepõe nada: nenhum elemento do convite é fixed/absolute/sticky", () => {
-    const bloco = cta().closest("div.mt-8");
-    expect(bloco).not.toBeNull();
-    for (const el of [bloco!, ...Array.from(bloco!.querySelectorAll("*"))]) {
+  it("o bloco final não flutua: nenhum elemento dele é fixed/absolute/sticky", () => {
+    const bloco = finalBlock()!;
+    for (const el of [bloco, ...Array.from(bloco.querySelectorAll("*"))]) {
       expect(el.className).not.toMatch(/\b(fixed|absolute|sticky)\b/);
     }
   });
 
-  it("existe exatamente um caminho para /criar", () => {
-    expect(container.querySelectorAll('a[href="/criar"]')).toHaveLength(1);
+  it("o selo flutuante é filho direto da raiz — fora do .animate-fade-up", () => {
+    const flutuante = container.querySelector<HTMLAnchorElement>(
+      '.card-float-dock a[href="/criar"]',
+    );
+    expect(flutuante).not.toBeNull();
+    expect(flutuante!.closest(".animate-fade-up")).toBeNull();
+  });
+
+  it("o indicador de música leva ao player, e o player tem o id alvo", () => {
+    const musicLink = container.querySelector<HTMLAnchorElement>(
+      'a[href="#musica-da-cartinha"]',
+    );
+    expect(musicLink).not.toBeNull();
+    expect(container.querySelector("#musica-da-cartinha")).not.toBeNull();
+    expect(musicLink!.closest(".animate-fade-up")).toBeNull();
   });
 
   it("o botão de compartilhar continua intacto (não houve regressão)", () => {
@@ -185,32 +215,34 @@ describe("estado aberto", () => {
   });
 });
 
-describe("nenhum dado da cartinha vaza para o CTA", () => {
+describe("nenhum dado da cartinha vaza para os CTAs", () => {
   it.each(["fechado", "aberto"] as const)("estado %s", (estado) => {
     render();
     if (estado === "aberto") act(() => openButton().click());
 
-    const html = cta().outerHTML;
-    for (const [campo, valor] of Object.entries(SENTINELAS)) {
-      expect(html, `"${campo}" apareceu no CTA`).not.toContain(valor);
+    const suspeitos = [
+      ...createLinks(),
+      ...Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')),
+    ];
+    expect(suspeitos.length).toBeGreaterThan(0);
+    for (const a of suspeitos) {
+      for (const [campo, valor] of Object.entries(SENTINELAS)) {
+        expect(a.outerHTML, `"${campo}" apareceu num CTA`).not.toContain(valor);
+      }
     }
-    // O destino é literal, sem query string, sem UTM, sem identificador.
-    expect(cta().getAttribute("href")).toBe("/criar");
-  });
-
-  it("o href não carrega query string em nenhum estado", () => {
-    render();
-    expect(cta().getAttribute("href")).not.toContain("?");
-    act(() => openButton().click());
-    expect(cta().getAttribute("href")).not.toContain("?");
+    for (const a of createLinks()) {
+      expect(a.getAttribute("href")).toBe("/criar"); // literal, sem query/UTM/id
+    }
   });
 });
 
 describe("cartinha sem música e sem fotos", () => {
-  it("o bloco final continua presente e no fim", () => {
+  it("o bloco final continua presente; nenhum indicador de música", () => {
     render({ ...CART, music: null, media: [] });
     act(() => openButton().click());
-    expect(container.textContent).toContain("Gostou desta surpresa? 💌");
-    expect(container.querySelectorAll('a[href="/criar"]')).toHaveLength(1);
+    expect(finalBlock()).not.toBeNull();
+    expect(container.querySelector("#musica-da-cartinha")).toBeNull();
+    expect(container.querySelector('[aria-label="Esta cartinha tem música"]')).toBeNull();
+    expect(container.querySelector('a[href="#musica-da-cartinha"]')).toBeNull();
   });
 });
