@@ -33,6 +33,8 @@ export type AnalyticsEvent =
   | "letter_published"
   | "cart_opened"
   | "whatsapp_share_clicked"
+  /** Clique no convite "criar a minha" dentro da cartinha pública (`/c/[slug]`). */
+  | "create_cta_from_card_clicked"
   | "music_search_started"
   | "music_search_completed"
   | "music_search_failed"
