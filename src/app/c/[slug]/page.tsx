@@ -41,8 +41,11 @@ function NotAvailable({ expired }: { expired: boolean }) {
           ? "O período de disponibilidade deste link chegou ao fim."
           : "O link pode estar incompleto ou a cartinha ainda não foi publicada."}
       </p>
+      {/* Direto para `/criar`, não para a landing: quem chega aqui já veio de
+          um link de cartinha e demonstrou interesse — obrigá-lo a atravessar a
+          página inicial só adiciona um passo. */}
       <Link
-        href="/"
+        href="/criar"
         className="rounded-full bg-dourado px-6 py-3 text-sm font-semibold text-vinho"
       >
         Criar a minha cartinha

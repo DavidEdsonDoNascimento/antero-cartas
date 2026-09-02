@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Cart } from "@/lib/types";
 import { getTheme } from "@/content/themes";
 import { CardPreview } from "@/components/card/CardPreview";
+import { CardCreateInvite } from "@/components/card/CardCreateInvite";
 import { youTubeEmbedUrl } from "@/lib/youtube";
 import { whatsappShareUrl } from "@/lib/whatsapp";
 import type { SelectedMusic } from "@/lib/types";
@@ -102,12 +103,19 @@ function ClosedEnvelope({
       >
         Abrir minha carta {theme.seal}
       </button>
+
+      {/* Convite secundário — deliberadamente depois e abaixo do botão de
+          abrir, que continua sendo a única ação principal desta tela. */}
+      <CardCreateInvite variant="discreta" theme={theme} />
     </div>
   );
 }
 
 function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
   const shareText = `Preparei uma cartinha especial para você 💌 ${shareUrl}`;
+  // Derivado aqui (em vez de descer por prop) pelo mesmo motivo que
+  // `CardPreview` faz: `getTheme` é uma busca pura em uma lista de quatro.
+  const theme = getTheme(cart.theme);
 
   return (
     <div className="w-full max-w-md animate-fade-up">
@@ -126,6 +134,11 @@ function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
           Compartilhar no WhatsApp
         </a>
       </div>
+
+      {/* Fora do contêiner de ações acima: compartilhar é para quem RECEBEU a
+          cartinha, criar é para quem só passou por ela. Ações diferentes, com
+          públicos diferentes, não podem ter o mesmo peso visual. */}
+      <CardCreateInvite variant="destaque" theme={theme} />
     </div>
   );
 }
