@@ -35,6 +35,8 @@ export type AnalyticsEvent =
   | "whatsapp_share_clicked"
   /** Clique no convite "criar a minha" dentro da cartinha pública (`/c/[slug]`). */
   | "create_cta_from_card_clicked"
+  /** Clique no indicador de música (cartinha aberta) — atalho de rolagem até o player. */
+  | "card_music_indicator_clicked"
   | "music_search_started"
   | "music_search_completed"
   | "music_search_failed"
