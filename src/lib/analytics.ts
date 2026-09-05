@@ -48,6 +48,8 @@ export type AnalyticsEvent =
   | "draft_saved"
   | "photo_uploaded"
   | "photo_removed"
+  /** Enquadramento de uma foto salvo na etapa Extras (agregado: só se voltou ao padrão). */
+  | "photo_framing_adjusted"
   | "order_created"
   | "mock_payment_confirmed"
   | "qr_code_viewed";

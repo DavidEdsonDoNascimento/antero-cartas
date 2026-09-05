@@ -1,4 +1,5 @@
 import type { Cart, CartMedia, SelectedMusic } from "@/lib/types";
+import { clampFraming, type PhotoFraming } from "@/lib/photoFraming";
 import { youTubeWatchUrl } from "@/lib/youtube";
 
 /**
@@ -14,7 +15,26 @@ export interface DbMediaRow {
   url: string;
   storageKey: string;
   position: number;
+  focalX: number | null;
+  focalY: number | null;
+  zoom: number | null;
   createdAt: Date;
+}
+
+/**
+ * Fotos gravadas antes do ajuste de enquadramento têm as três colunas NULAS —
+ * e continuam sem enquadramento (`null`), o que a renderização traduz no
+ * recorte centralizado de sempre. Uma coluna preenchida basta para haver
+ * ajuste; as demais caem no padrão, e `clampFraming` fecha a porta para
+ * qualquer valor fora de faixa que tenha chegado ao banco.
+ */
+function toFraming(row: Pick<DbMediaRow, "focalX" | "focalY" | "zoom">): PhotoFraming | null {
+  if (row.focalX === null && row.focalY === null && row.zoom === null) return null;
+  return clampFraming({
+    x: row.focalX ?? undefined,
+    y: row.focalY ?? undefined,
+    zoom: row.zoom ?? undefined,
+  });
 }
 
 export interface DbCartRow {
@@ -67,6 +87,7 @@ export function dbToDomainCart(row: DbCartRow): Cart {
       url: m.url,
       storageKey: m.storageKey,
       position: m.position,
+      framing: toFraming(m),
       createdAt: m.createdAt.toISOString(),
     }));
 

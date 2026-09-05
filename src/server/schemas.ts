@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LIMITS } from "@/lib/limits";
+import { MAX_ZOOM, MIN_ZOOM } from "@/lib/photoFraming";
 
 /** Validação central do servidor. Não confiar apenas no cliente. */
 
@@ -51,6 +52,26 @@ export const draftUpdateSchema = z
   .strict();
 
 export type DraftUpdateInput = z.infer<typeof draftUpdateSchema>;
+
+/**
+ * Enquadramento de UMA foto. Os limites são os mesmos do cliente
+ * (`@/lib/photoFraming`), mas repetidos aqui porque o servidor não confia no
+ * que chega: qualquer valor fora de 0..1 (ponto focal) ou de MIN_ZOOM..MAX_ZOOM
+ * é recusado, e `.strict()` impede que campos extras — inclusive um "offset em
+ * pixels" — entrem por engano. `null` limpa o ajuste (volta ao padrão).
+ */
+export const framingSchema = z
+  .object({
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    zoom: z.number().min(MIN_ZOOM).max(MAX_ZOOM),
+  })
+  .strict()
+  .nullable();
+
+export const mediaFramingSchema = z.object({ framing: framingSchema }).strict();
+
+export type MediaFramingInput = z.infer<typeof mediaFramingSchema>;
 
 /** Reordenação das fotos: lista completa de ids na nova ordem. */
 export const reorderSchema = z.object({

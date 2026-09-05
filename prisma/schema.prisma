@@ -105,6 +105,14 @@ model CartMedia {
   width     Int?
   height    Int?
   position  Int
+  /// Enquadramento escolhido pelo cliente: ponto focal normalizado (0..1) e
+  /// zoom (1..3) sobre o recorte "cover". NULL = foto sem ajuste, renderizada
+  /// centralizada como sempre foi — por isso as três colunas são opcionais e
+  /// sem default (aditivas e retrocompatíveis). O arquivo original nunca é
+  /// alterado; só estes metadados. Ver src/lib/photoFraming.ts.
+  focalX    Float?
+  focalY    Float?
+  zoom      Float?
   createdAt DateTime @default(now())
 
   @@index([cartId])

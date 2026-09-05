@@ -13,6 +13,7 @@ import { ALLOWED_IMAGE_MIME, extensionForMime, sniffImageMime } from "@/lib/imag
 import { getStorage } from "@/server/storage";
 import { ApiError } from "@/server/errors";
 import type { DraftUpdateInput } from "@/server/schemas";
+import { clampFraming, type PhotoFraming } from "@/lib/photoFraming";
 import type { Cart, PlanType } from "@/lib/types";
 
 const EDITABLE_STATUSES = new Set(["DRAFT", "AWAITING_PAYMENT"]);
@@ -206,6 +207,50 @@ export async function removeMedia(
   } catch (err) {
     console.error(`[storage] falha ao remover ${media.storageKey}:`, err);
   }
+
+  return dbToDomainCart(await loadRow(cartId));
+}
+
+/**
+ * Grava (ou limpa, com `null`) o enquadramento de UMA foto.
+ *
+ * Autorização: exatamente a mesma do resto da edição do rascunho — token de
+ * edição válido (`loadRowWithToken`) e carta ainda editável. Além disso a
+ * foto é buscada com `cartId` no filtro, então o id de uma foto de OUTRO
+ * rascunho não é encontrado e vira 404: um token válido não dá acesso às
+ * fotos de outra carta.
+ *
+ * Só metadados mudam aqui. O arquivo no storage nunca é reescrito, e o
+ * enquadramento fica preso ao id da foto — reordenar ou trocar a capa
+ * (`reorderMedia`, que só escreve `position`) não o afeta.
+ */
+export async function updateMediaFraming(
+  cartId: string,
+  token: string | null,
+  mediaId: string,
+  framing: PhotoFraming | null,
+): Promise<Cart> {
+  const row = await loadRowWithToken(cartId, token);
+  requireEditable(row.status);
+
+  const media = await prisma.cartMedia.findFirst({
+    where: { id: mediaId, cartId },
+    select: { id: true },
+  });
+  if (!media) throw new ApiError("not_found", "Foto não encontrada.");
+
+  // Reaplica o clamp do domínio mesmo depois do Zod: é o schema que recusa o
+  // que está fora de faixa, e é aqui que o valor gravado fica canônico
+  // (arredondado), sem depender de quem chamou.
+  const value = framing ? clampFraming(framing) : null;
+  await prisma.cartMedia.update({
+    where: { id: mediaId },
+    data: {
+      focalX: value?.x ?? null,
+      focalY: value?.y ?? null,
+      zoom: value?.zoom ?? null,
+    },
+  });
 
   return dbToDomainCart(await loadRow(cartId));
 }

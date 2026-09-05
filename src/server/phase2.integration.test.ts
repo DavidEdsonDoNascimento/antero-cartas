@@ -111,6 +111,63 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
     expect(afterReorder.media.map((m) => m.position)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  it("persiste o ajuste de enquadramento e o preserva ao reordenar/trocar a capa", async () => {
+    const { cart, editToken } = await cartService.createDraft();
+    cartIdsToClean.push(cart.id);
+
+    let current = cart;
+    for (let i = 0; i < 3; i++) {
+      current = await cartService.addMedia(cart.id, editToken, {
+        body: jpegBytes(),
+        declaredType: "image/jpeg",
+      });
+    }
+    const [a, b, c] = current.media.map((m) => m.id);
+
+    // Foto recém-enviada nasce sem metadados — igual às fotos antigas.
+    expect(current.media.every((m) => m.framing === null)).toBe(true);
+
+    const adjusted = await cartService.updateMediaFraming(cart.id, editToken, b, {
+      x: 0.42,
+      y: 0.08,
+      zoom: 1.9,
+    });
+    expect(adjusted.media.find((m) => m.id === b)?.framing).toEqual({
+      x: 0.42,
+      y: 0.08,
+      zoom: 1.9,
+    });
+
+    // Relido do banco (é isso que o retomar do rascunho e a carta pública fazem).
+    const reloaded = await cartService.getCartForEdit(cart.id, editToken);
+    expect(reloaded.media.find((m) => m.id === b)?.framing).toEqual({
+      x: 0.42,
+      y: 0.08,
+      zoom: 1.9,
+    });
+
+    // "b" vira capa: o ajuste acompanha a FOTO, não a posição.
+    const afterCover = await cartService.reorderMedia(cart.id, editToken, [b, a, c]);
+    expect(afterCover.media[0].id).toBe(b);
+    expect(afterCover.media[0].framing).toEqual({ x: 0.42, y: 0.08, zoom: 1.9 });
+    expect(afterCover.media[1].framing).toBeNull();
+
+    // Restaurar o padrão apaga os metadados de vez.
+    const cleared = await cartService.updateMediaFraming(cart.id, editToken, b, null);
+    expect(cleared.media.find((m) => m.id === b)?.framing).toBeNull();
+
+    // Um token válido de OUTRO rascunho não alcança esta foto.
+    const outro = await cartService.createDraft();
+    cartIdsToClean.push(outro.cart.id);
+    await expect(
+      cartService.updateMediaFraming(outro.cart.id, outro.editToken, b, {
+        x: 0,
+        y: 0,
+        zoom: 3,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("persiste a música selecionada e permite trocar/remover", async () => {
     const { cart, editToken } = await cartService.createDraft();
     cartIdsToClean.push(cart.id);
