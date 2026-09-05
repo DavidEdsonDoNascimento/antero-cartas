@@ -14,6 +14,7 @@ function demoPhoto(id: string, from: string, to: string, emoji: string, position
     url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
     storageKey: null,
     position,
+    framing: null,
     createdAt: new Date().toISOString(),
   };
 }

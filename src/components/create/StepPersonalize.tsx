@@ -4,10 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import type { Cart, ThemeId } from "@/lib/types";
 import { themes } from "@/content/themes";
 import { MAX_CART_PHOTOS, compressPhoto, validateImageFile } from "@/lib/image";
-import { uploadPhoto, removePhoto, reorderPhotos, ApiClientError } from "@/lib/api";
+import {
+  uploadPhoto,
+  removePhoto,
+  reorderPhotos,
+  updatePhotoFraming,
+  ApiClientError,
+} from "@/lib/api";
+import { framingStyle, type PhotoFraming } from "@/lib/photoFraming";
 import type { CartSession } from "@/lib/cartSession";
 import { track } from "@/lib/analytics";
 import { MusicPicker } from "./MusicPicker";
+import { PhotoFramingDialog } from "./PhotoFramingDialog";
 import { FieldLabel, StepHeader, Toggle } from "./ui";
 
 interface Props {
@@ -54,6 +62,8 @@ function PhotosField({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [optimistic, setOptimistic] = useState<OptimisticPhoto[]>([]);
+  /** Id da foto cujo enquadramento está sendo ajustado (null = diálogo fechado). */
+  const [adjustingId, setAdjustingId] = useState<string | null>(null);
   const optimisticRef = useRef<OptimisticPhoto[]>([]);
   useEffect(() => {
     optimisticRef.current = optimistic;
@@ -159,6 +169,30 @@ function PhotosField({
     }
   }
 
+  /**
+   * Salva o enquadramento. Aplica na hora (a prévia precisa reagir ao clique,
+   * não à latência da rede) e desfaz se o servidor recusar — mesmo padrão de
+   * `persistOrder`. O ajuste vai preso ao id da foto, então reordenar ou
+   * trocar a capa depois não o desloca para outra imagem.
+   */
+  async function saveFraming(mediaId: string, framing: PhotoFraming | null) {
+    setError(null);
+    setAdjustingId(null);
+    const previous = cart.media;
+    onCartUpdated({
+      ...cart,
+      media: previous.map((m) => (m.id === mediaId ? { ...m, framing } : m)),
+    });
+    try {
+      const res = await updatePhotoFraming(session.cartId, session.editToken, mediaId, framing);
+      onCartUpdated(res.cart);
+      track("photo_framing_adjusted", { reset: framing ? "no" : "yes" });
+    } catch (err) {
+      onCartUpdated({ ...cart, media: previous }); // rollback
+      setError(apiErrorMessage(err, "Não foi possível salvar o ajuste da foto."));
+    }
+  }
+
   function move(index: number, dir: -1 | 1) {
     const target = index + dir;
     if (target < 0 || target >= cart.media.length) return;
@@ -173,6 +207,9 @@ function PhotosField({
   }
 
   const totalCount = cart.media.length + optimistic.length;
+  // Busca por id, nunca por índice: uma remoção ou reordenação enquanto o
+  // diálogo está aberto não pode fazê-lo passar a editar outra foto.
+  const adjustingPhoto = cart.media.find((m) => m.id === adjustingId) ?? null;
 
   return (
     <div>
@@ -183,12 +220,17 @@ function PhotosField({
             {cart.media.map((m, i) => (
               <div key={m.id} className="w-24">
                 <div className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={m.url}
-                    alt={`Foto ${i + 1}`}
-                    className="h-24 w-24 rounded-lg object-cover shadow"
-                  />
+                  {/* A miniatura usa o MESMO `framingStyle` da carta — o que o
+                      cliente vê aqui é o recorte que vai para a cartinha. */}
+                  <div className="h-24 w-24 overflow-hidden rounded-lg shadow">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={m.url}
+                      alt={`Foto ${i + 1}`}
+                      className="h-full w-full"
+                      style={framingStyle(m.framing)}
+                    />
+                  </div>
                   {i === 0 && (
                     <span className="absolute left-1 top-1 rounded bg-vinho/90 px-1.5 py-0.5 text-[10px] font-semibold text-creme">
                       ★ Capa
@@ -231,6 +273,15 @@ function PhotosField({
                     →
                   </button>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setAdjustingId(m.id)}
+                  disabled={busy}
+                  aria-label={`Ajustar enquadramento da foto ${i + 1}`}
+                  className="mt-1 w-full rounded-md border border-rosa/40 bg-white px-1 py-1 text-[11px] font-medium text-vinho transition hover:border-vinho/50 hover:bg-rosa-soft/30 disabled:opacity-50"
+                >
+                  Ajustar foto
+                </button>
               </div>
             ))}
 
@@ -289,13 +340,26 @@ function PhotosField({
           hidden
           onChange={(e) => handleFiles(e.target.files)}
         />
-        {cart.media.length > 1 && (
+        {cart.media.length > 0 && (
           <p className="text-xs text-grafite/45">
-            A primeira foto é a capa. Use “capa” ou as setas para reordenar — a ordem
-            aparece no carrossel da carta.
+            {cart.media.length > 1
+              ? "A primeira foto é a capa. Use “capa” ou as setas para reordenar — a ordem aparece no carrossel da carta. "
+              : ""}
+            Em “Ajustar foto” você escolhe qual parte de cada foto aparece na cartinha.
           </p>
         )}
         {error && <p className="text-xs text-vinho">{error}</p>}
+
+        {adjustingPhoto && (
+          <PhotoFramingDialog
+            key={adjustingPhoto.id}
+            src={adjustingPhoto.url}
+            label={`Foto ${cart.media.indexOf(adjustingPhoto) + 1}`}
+            framing={adjustingPhoto.framing}
+            onCancel={() => setAdjustingId(null)}
+            onSave={(framing) => saveFraming(adjustingPhoto.id, framing)}
+          />
+        )}
       </div>
     </div>
   );

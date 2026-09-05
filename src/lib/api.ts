@@ -5,6 +5,7 @@
  */
 
 import type { Cart } from "@/lib/types";
+import type { PhotoFraming } from "@/lib/photoFraming";
 
 const EDIT_TOKEN_HEADER = "x-cart-edit-token";
 
@@ -127,6 +128,24 @@ export function removePhoto(
   mediaId: string,
 ): Promise<{ cart: Cart }> {
   return request(`/api/carts/${cartId}/media/${mediaId}`, { method: "DELETE", token });
+}
+
+/**
+ * Salva o enquadramento (ponto focal + zoom) de uma foto. `null` restaura o
+ * padrão. Não reenvia a imagem — só os metadados.
+ */
+export function updatePhotoFraming(
+  cartId: string,
+  token: string,
+  mediaId: string,
+  framing: PhotoFraming | null,
+): Promise<{ cart: Cart }> {
+  return request(`/api/carts/${cartId}/media/${mediaId}`, {
+    method: "PATCH",
+    token,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ framing }),
+  });
 }
 
 export function reorderPhotos(

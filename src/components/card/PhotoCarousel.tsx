@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CartMedia } from "@/lib/types";
+import { CARD_PHOTO_ASPECT, framingStyle } from "@/lib/photoFraming";
 
 /**
  * Carrossel de fotos leve e acessível — sem dependências externas.
@@ -10,6 +11,11 @@ import type { CartMedia } from "@/lib/types";
  *   navegação por teclado e rótulos acessíveis.
  * - O crossfade usa transição de opacidade, neutralizada por
  *   prefers-reduced-motion (regra global), preservando a proporção via cover.
+ * - A moldura tem proporção fixa e a foto a preenche com `cover`, então há
+ *   recorte. Qual parte da foto sobrevive ao recorte é decisão do cliente:
+ *   vem de `framingStyle(m.framing)` — a MESMA função usada na prévia da
+ *   jornada de criação e na miniatura da etapa Extras. Sem ajuste, o recorte
+ *   é centralizado, exatamente como sempre foi.
  */
 export function PhotoCarousel({
   media,
@@ -107,7 +113,10 @@ export function PhotoCarousel({
           {!isClean && (
             <span className="tape absolute -top-2 left-1/2 h-5 w-16 -translate-x-1/2 -rotate-2 rounded-[2px]" />
           )}
-          <div className="relative aspect-[4/3] w-full overflow-hidden bg-black/5">
+          <div
+            className="relative w-full overflow-hidden bg-black/5"
+            style={{ aspectRatio: CARD_PHOTO_ASPECT }}
+          >
             {media.map((m, i) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -116,8 +125,8 @@ export function PhotoCarousel({
                 alt={`Foto ${i + 1} de ${count}`}
                 aria-hidden={i !== safeIndex}
                 draggable={false}
-                className="absolute inset-0 h-full w-full object-cover transition-opacity duration-500"
-                style={{ opacity: i === safeIndex ? 1 : 0 }}
+                className="absolute inset-0 h-full w-full transition-opacity duration-500"
+                style={{ ...framingStyle(m.framing), opacity: i === safeIndex ? 1 : 0 }}
               />
             ))}
           </div>

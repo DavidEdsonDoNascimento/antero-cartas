@@ -72,6 +72,9 @@ describe("dbToDomainCart", () => {
             url: "u2",
             storageKey: "k2",
             position: 1,
+            focalX: null,
+            focalY: null,
+            zoom: null,
             createdAt: new Date(),
           },
           {
@@ -81,12 +84,82 @@ describe("dbToDomainCart", () => {
             url: "u1",
             storageKey: "k1",
             position: 0,
+            focalX: null,
+            focalY: null,
+            zoom: null,
             createdAt: new Date(),
           },
         ],
       }),
     );
     expect(cart.media.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("foto antiga (colunas de enquadramento NULAS) chega ao domínio sem ajuste", () => {
+    const cart = dbToDomainCart(
+      baseRow({
+        media: [
+          {
+            id: "m1",
+            cartId: "cart_1",
+            type: "photo",
+            url: "u1",
+            storageKey: "k1",
+            position: 0,
+            focalX: null,
+            focalY: null,
+            zoom: null,
+            createdAt: new Date(),
+          },
+        ],
+      }),
+    );
+    expect(cart.media[0].framing).toBeNull();
+  });
+
+  it("foto ajustada chega com o enquadramento gravado", () => {
+    const cart = dbToDomainCart(
+      baseRow({
+        media: [
+          {
+            id: "m1",
+            cartId: "cart_1",
+            type: "photo",
+            url: "u1",
+            storageKey: "k1",
+            position: 0,
+            focalX: 0.3,
+            focalY: 0.1,
+            zoom: 1.6,
+            createdAt: new Date(),
+          },
+        ],
+      }),
+    );
+    expect(cart.media[0].framing).toEqual({ x: 0.3, y: 0.1, zoom: 1.6 });
+  });
+
+  it("coluna solta ou valor fora de faixa no banco não produz enquadramento inválido", () => {
+    const cart = dbToDomainCart(
+      baseRow({
+        media: [
+          {
+            id: "m1",
+            cartId: "cart_1",
+            type: "photo",
+            url: "u1",
+            storageKey: "k1",
+            position: 0,
+            focalX: null,
+            focalY: 7,
+            zoom: null,
+            createdAt: new Date(),
+          },
+        ],
+      }),
+    );
+    // Só focalY existe: os outros eixos caem no padrão e o valor é cortado.
+    expect(cart.media[0].framing).toEqual({ x: 0.5, y: 1, zoom: 1 });
   });
 
   it("nunca inclui editTokenHash ou outros campos internos no resultado", () => {

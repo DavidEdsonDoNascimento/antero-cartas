@@ -3,6 +3,10 @@
  * Usado localmente na Fase 1 e pronto para persistência (Prisma) na Fase 2.
  */
 
+import type { PhotoFraming } from "@/lib/photoFraming";
+
+export type { PhotoFraming };
+
 export type CartStatus =
   | "DRAFT"
   | "AWAITING_PAYMENT"
@@ -38,6 +42,13 @@ export interface CartMedia {
   url: string;
   storageKey: string | null;
   position: number;
+  /**
+   * Ajuste de enquadramento escolhido pelo cliente (ponto focal + zoom).
+   * `null` = sem ajuste: recorte centralizado, como sempre foi. Está preso ao
+   * `id` da foto, não à posição — reordenar ou trocar a capa não mexe nele.
+   * Ver `@/lib/photoFraming`.
+   */
+  framing: PhotoFraming | null;
   createdAt: string;
 }
 
