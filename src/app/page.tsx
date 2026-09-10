@@ -47,7 +47,7 @@ export default function Home() {
                 </Link>
               </div>
               <p className="mt-4 text-sm text-grafite/50">
-                Sem instalar aplicativo · Sem cadastro · Pronta em ~3 minutos
+                Sem instalar aplicativo · Sem cadastro · Pronta em 3 minutos
               </p>
             </div>
 
@@ -96,7 +96,10 @@ export default function Home() {
         {/* Benefícios */}
         <section className="py-16">
           <div className="mx-auto max-w-6xl px-4">
-            <SectionHeading eyebrow="Benefícios" title="Tudo o que sua cartinha tem" />
+            <SectionHeading
+              eyebrow="Benefícios"
+              title="Tudo o que sua cartinha tem"
+            />
             <Benefits />
           </div>
         </section>
@@ -119,7 +122,10 @@ export default function Home() {
         {/* Depoimentos */}
         <section className="py-16">
           <div className="mx-auto max-w-6xl px-4">
-            <SectionHeading eyebrow="Depoimentos" title="Quem já surpreendeu alguém" />
+            <SectionHeading
+              eyebrow="Depoimentos"
+              title="Quem já surpreendeu alguém"
+            />
             <Testimonials />
           </div>
         </section>
@@ -127,7 +133,10 @@ export default function Home() {
         {/* Dúvidas */}
         <section id="duvidas" className="bg-creme-dark/40 py-16">
           <div className="mx-auto max-w-6xl px-4">
-            <SectionHeading eyebrow="Dúvidas frequentes" title="Perguntas que sempre chegam" />
+            <SectionHeading
+              eyebrow="Dúvidas frequentes"
+              title="Perguntas que sempre chegam"
+            />
             <Faq />
           </div>
         </section>
