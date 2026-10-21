@@ -1,0 +1,85 @@
+# ===========================================================================
+# Antero Cartas — ambiente LOCAL DESCARTÁVEL em contêiner (docs/0011).
+#
+# Reproduz a topologia planejada para o Coolify: app (imagem deste repo) +
+# PostgreSQL 17 dedicado, falando pela rede interna, com fotos num volume
+# persistente. Pagamento e e-mail em MOCK; nenhum serviço externo é usado
+# (busca de música também em mock).
+#
+#   docker compose -f compose.local.yaml up -d --build
+#   curl -s http://127.0.0.1:3100/api/health
+#   docker compose -f compose.local.yaml down        # mantém os volumes
+#   docker compose -f compose.local.yaml down -v     # APAGA banco e fotos locais
+#
+# As senhas abaixo são de um banco descartável em localhost — não são
+# credenciais de nenhum ambiente real.
+# ===========================================================================
+name: antero-cartas-local
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: antero_cartas
+      POSTGRES_USER: antero_cartas
+      POSTGRES_PASSWORD: antero-local-descartavel
+      TZ: UTC
+      PGTZ: UTC
+    command: ["postgres", "-c", "timezone=UTC", "-c", "log_timezone=UTC"]
+    # Sem `ports`: o banco só é alcançável pela rede interna do compose.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U antero_cartas -d antero_cartas"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 512M }
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: local
+        APP_ENV: local
+        PAYMENT_MODE: mock
+        NEXT_PUBLIC_SITE_URL: http://localhost:3100
+        NEXT_PUBLIC_PAYMENT_MODE: mock
+        NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION: "true"
+        NEXT_PUBLIC_YOUTUBE_SEARCH_ENABLED: "true"
+        NEXT_PUBLIC_ANALYTICS_ENABLED: "false"
+    image: antero-cartas:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql://antero_cartas:antero-local-descartavel@db:5432/antero_cartas
+      MIGRATE_ON_START: "true"
+      # Fotos no volume persistente (padrões da imagem, repetidos por clareza)
+      STORAGE_PROVIDER: local
+      STORAGE_DIR: /data/uploads
+      MEDIA_URL_STRATEGY: storage_key
+      # Mock — nada sai para Mercado Pago, Resend ou YouTube
+      PAYMENT_MODE: mock
+      NEXT_PUBLIC_PAYMENT_MODE: mock
+      ALLOW_MOCK_PAYMENT_CONFIRMATION: "true"
+      EMAIL_MODE: mock
+      DEV_EMAILS_ENABLED: "false"
+      YOUTUBE_SEARCH_MODE: mock
+      MAINTENANCE_MODE: ${MAINTENANCE_MODE:-false}
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - uploads:/data/uploads
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

@@ -27,7 +27,16 @@ const paymentMode = assertPaymentModeConsistency(
  */
 const isProduction = process.env.APP_ENV?.trim() === "production";
 
+/**
+ * Saída `standalone` (servidor Node mínimo + dependências rastreadas) só no
+ * build da imagem Docker (docs/0011), onde o Dockerfile define
+ * NEXT_OUTPUT_STANDALONE=true. Sem a variável — Vercel, `pnpm build` local —
+ * a configuração continua exatamente a de antes.
+ */
+const standaloneOutput = process.env.NEXT_OUTPUT_STANDALONE?.trim() === "true";
+
 const nextConfig: NextConfig = {
+  ...(standaloneOutput ? { output: "standalone" as const } : {}),
   images: {
     remotePatterns: [
       // Miniaturas de música do YouTube exibidas no preview.

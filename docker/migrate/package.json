@@ -1,0 +1,12 @@
+{
+  "name": "antero-cartas-migrate",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dependências mínimas para aplicar migrations dentro da imagem Docker (docs/0011). Versões exatas iguais às do pnpm-lock.yaml da raiz — conferido por src/server/dockerMigrateDeps.test.ts.",
+  "packageManager": "pnpm@11.18.0",
+  "dependencies": {
+    "dotenv": "17.4.2",
+    "pg": "8.22.0",
+    "prisma": "7.9.1"
+  }
+}
