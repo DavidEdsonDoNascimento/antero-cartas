@@ -649,3 +649,60 @@ limitação de sempre: por instância, não compartilhado entre instâncias
 serverless (Redis fica fora do escopo, task 013 seção 20). O webhook não
 recebe rate limit por IP — sua proteção é a assinatura (D60/D61), e limitar
 por IP arriscaria descartar notificações legítimas do Mercado Pago.
+
+---
+
+## Hospedagem em contêiner (Coolify) — Fase 2 da migração
+
+Contexto: o Supabase gratuito pausa por inatividade e leva junto o banco **e**
+as fotos. A decisão é mover app, PostgreSQL e fotos para o Coolify na VPS
+Hostinger (docs/0011). Nada abaixo muda a produção atual na Vercel.
+
+## D67 — Imagem standalone condicionada a variável, Node 24 bookworm
+`output: "standalone"` só quando `NEXT_OUTPUT_STANDALONE=true` (definida apenas
+pelo Dockerfile): o build da Vercel continua com a configuração idêntica.
+Debian bookworm (não Alpine) porque o motor de migration do Prisma 7 é um
+binário `debian-openssl-3.0.x`. pnpm 11.18 via corepack, lido do
+`packageManager`. Runtime como usuário `node`, código somente leitura; só
+`/app/.next/cache` e `/data/uploads` são graváveis. Corrigido junto um aviso
+antigo do Turbopack ("unexpected file in NFT list"): o caminho dinâmico do
+storage em disco fazia o build rastrear o projeto inteiro.
+
+## D68 — Migrations no início do contêiner, nunca no build
+`scripts/migrateDeploy.mjs` roda no entrypoint, antes do `server.js`: espera
+o banco, aplica `prisma migrate deploy` e, se falhar, o contêiner sai e o
+servidor não sobe (que o Coolify mantenha a versão anterior ainda precisa ser
+verificado na homologação). Recusa hosts do
+Supabase sem `ALLOW_MIGRATE_ON_SUPABASE=true`. O Prisma CLI vem de um projeto
+mínimo (`docker/migrate`) com lockfile próprio; um teste garante as mesmas
+versões do app. `scripts/vercelProductionMigrate.mjs` (caminho da Vercel)
+não foi alterado.
+
+## D69 — Fotos em volume persistente com o provider de disco existente
+`STORAGE_PROVIDER=local` + `STORAGE_DIR=/data/uploads` (volume), servido por
+`/api/media`. Escrita atômica (temporário + `rename`). O entrypoint recusa
+iniciar sem volume montado — sem isso, um deploy apagaria as fotos
+silenciosamente. Sem `VOLUME` no Dockerfile pelo mesmo motivo (um volume
+anônimo esconderia a falta do volume real).
+
+## D70 — URL da foto derivada de `storageKey`, opt-in
+`MEDIA_URL_STRATEGY=storage_key` resolve a URL pelo provider ativo; o padrão
+`stored` mantém `CartMedia.url` (produção atual inalterada). Evita UPDATE em
+massa na migração e em trocas futuras de storage. Chave inválida ou falha do
+provider caem para a URL gravada — os registros legados de teste não derrubam
+a cartinha. `dbToDomainCart` recebe o resolvedor por parâmetro e continua sem
+depender de storage.
+
+## D71 — Modo de manutenção por rota, não por `proxy.ts`
+`MAINTENANCE_MODE=true` responde 503 + `Retry-After` em toda escrita,
+inclusive o webhook do Mercado Pago (nunca 200 falso: o provedor reenvia).
+Checagem dentro de cada handler em vez de `proxy.ts` porque o proxy rodaria em
+toda requisição também na Vercel e bufferizaria o corpo dos uploads (10 MB
+padrão = tamanho máximo da foto). Um teste estrutural falha se uma rota de
+escrita nova ficar sem a checagem, ou se surgir GET/Server Action não revisado.
+
+## D72 — Health check com banco e volume; build fora da VPS
+`/api/health` (200/503, sem detalhes internos) e `?probe=live`. Workflow do
+GitHub Actions só manual: valida, constrói e só publica no GHCR se marcado,
+com tag `<ambiente>-<sha>`; nenhum deploy automático. Uma imagem por ambiente,
+porque `NEXT_PUBLIC_*`, CSP e HSTS são fixados no build.
