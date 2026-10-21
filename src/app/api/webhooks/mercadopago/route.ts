@@ -1,6 +1,7 @@
 import { verifyMercadoPagoSignature } from "@/server/payment/mercadoPagoWebhookSignature";
 import { fetchMercadoPagoPayment } from "@/server/payment/mercadopago";
 import { applyMercadoPagoWebhook } from "@/server/orderService";
+import { maintenanceResponse } from "@/server/maintenance";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,15 @@ interface MercadoPagoNotification {
  * construção, então reenviar é seguro).
  */
 export async function POST(req: Request): Promise<Response> {
+  // Manutenção (migração de hospedagem): 503 antes de ler o corpo, validar
+  // assinatura, consultar o Mercado Pago ou tocar no banco. Nunca 200 — o
+  // provedor precisa reenviar quando o banco de destino estiver no ar.
+  const maintenance = maintenanceResponse();
+  if (maintenance) {
+    console.warn("[webhook][mercadopago] recusado com 503: modo de manutenção ativo");
+    return maintenance;
+  }
+
   const url = new URL(req.url);
   const raw = (await req.json().catch(() => null)) as MercadoPagoNotification | null;
 

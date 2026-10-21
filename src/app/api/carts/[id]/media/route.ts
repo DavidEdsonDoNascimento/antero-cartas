@@ -1,6 +1,7 @@
 import { addMedia } from "@/server/cartService";
 import { jsonError, jsonOk, ApiError } from "@/server/errors";
 import { readEditToken } from "@/server/editTokenHeader";
+import { assertNotInMaintenance } from "@/server/maintenance";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   try {
+    assertNotInMaintenance();
     const { id } = await params;
     const token = readEditToken(req);
 
