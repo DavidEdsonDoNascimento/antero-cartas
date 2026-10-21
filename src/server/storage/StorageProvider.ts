@@ -1,8 +1,8 @@
 /**
  * Contrato de storage desacoplado do fornecedor.
  * O domínio nunca fala com um SDK específico — só com esta interface.
- * Fase 2: implementação em disco local (dev). Produção: S3/R2 atrás da mesma
- * interface (ver docs/0003 e 0004).
+ * Implementações: disco local (dev e, com volume persistente, a produção em
+ * contêiner — docs/0011) e Supabase Storage (produção atual na Vercel).
  */
 export interface StoragePutInput {
   /** Chave no formato carts/{cartId}/{uuid}.{ext}. */
@@ -17,6 +17,11 @@ export interface StorageProvider {
   getPublicUrl(key: string): string;
   /** Lê o objeto (usado pelo provider de disco para servir via rota). */
   read(key: string): Promise<{ body: Buffer; contentType: string } | null>;
+  /**
+   * Verificação leve para o health check (opcional). Lança se o storage não
+   * puder ser usado agora — ex.: volume ausente ou sem permissão de escrita.
+   */
+  check?(): Promise<void>;
 }
 
 /** Chave só pode conter carts/{id}/{uuid}.{ext} — sem caminhos arbitrários. */

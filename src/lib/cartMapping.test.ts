@@ -167,3 +167,30 @@ describe("dbToDomainCart", () => {
     expect(cart).not.toHaveProperty("editTokenHash");
   });
 });
+
+describe("dbToDomainCart — resolveMediaUrl", () => {
+  const now = new Date("2026-10-01T00:00:00Z");
+  const media = [
+    { id: "m2", cartId: "c1", type: "photo", url: "https://x/2.jpg", storageKey: "carts/c1/2.jpg", position: 1, focalX: 0.25, focalY: 0.75, zoom: 2, createdAt: now },
+    { id: "m1", cartId: "c1", type: "photo", url: "https://x/1.jpg", storageKey: "carts/c1/1.jpg", position: 0, focalX: null, focalY: null, zoom: null, createdAt: now },
+  ];
+
+  it("usa o resolvedor para a URL e preserva posição e enquadramento", () => {
+    const cart = dbToDomainCart(baseRow({ media }), {
+      resolveMediaUrl: (m) => `/api/media/${m.storageKey}`,
+    });
+    expect(cart.media.map((m) => [m.id, m.url, m.position])).toEqual([
+      ["m1", "/api/media/carts/c1/1.jpg", 0],
+      ["m2", "/api/media/carts/c1/2.jpg", 1],
+    ]);
+    expect(cart.media[0].framing).toBeNull();
+    expect(cart.media[1].framing).toEqual({ x: 0.25, y: 0.75, zoom: 2 });
+  });
+
+  it("sem resolvedor usa a URL gravada, como sempre", () => {
+    expect(dbToDomainCart(baseRow({ media })).media.map((m) => m.url)).toEqual([
+      "https://x/1.jpg",
+      "https://x/2.jpg",
+    ]);
+  });
+});
