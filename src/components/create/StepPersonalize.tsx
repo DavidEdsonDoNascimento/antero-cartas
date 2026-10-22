@@ -3,13 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { Cart, ThemeId } from "@/lib/types";
 import { themes } from "@/content/themes";
-import { MAX_CART_PHOTOS, compressPhoto, validateImageFile } from "@/lib/image";
+import {
+  MAX_CART_PHOTOS,
+  PhotoProcessingError,
+  preparePhotoForUpload,
+  validateImageFile,
+} from "@/lib/image";
 import {
   uploadPhoto,
   removePhoto,
   reorderPhotos,
   updatePhotoFraming,
   ApiClientError,
+  RequestTimeoutError,
 } from "@/lib/api";
 import { framingStyle, type PhotoFraming } from "@/lib/photoFraming";
 import type { CartSession } from "@/lib/cartSession";
@@ -46,9 +52,22 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiClientError ? err.message : fallback;
 }
 
+function uploadErrorMessage(err: unknown): string {
+  if (err instanceof ApiClientError) return err.message;
+  if (err instanceof RequestTimeoutError) {
+    return "O envio da foto demorou demais. Verifique a conexão e toque em “Tentar de novo”.";
+  }
+  if (err instanceof PhotoProcessingError) {
+    return "Não foi possível preparar esta foto. Toque em “Tentar de novo” ou escolha outra.";
+  }
+  // `fetch` rejeita com TypeError quando a conexão cai.
+  return "Não foi possível enviar a foto. Verifique a conexão e toque em “Tentar de novo”.";
+}
+
 /** Prévia local de uma foto ainda em envio — nunca faz parte de cart.media. */
 interface OptimisticPhoto {
   id: string;
+  file: File;
   previewUrl: string;
   status: "uploading" | "error";
 }
@@ -98,42 +117,60 @@ function PhotosField({
     // Prévia otimista imediata — aparece antes de validar, comprimir ou
     // enviar. É isso que elimina a demora percebida entre selecionar a foto
     // e vê-la na tela (o pipeline em si não muda).
-    const entries = chosen.map((file) => ({
+    const entries: OptimisticPhoto[] = chosen.map((file) => ({
       id: crypto.randomUUID(),
       file,
       previewUrl: URL.createObjectURL(file),
+      status: "uploading",
     }));
-    setOptimistic((prev) => [
-      ...prev,
-      ...entries.map(({ id, previewUrl }) => ({ id, previewUrl, status: "uploading" as const })),
-    ]);
+    setOptimistic((prev) => [...prev, ...entries]);
 
     setBusy(true);
-    for (const { id, file, previewUrl } of entries) {
+    try {
+      for (const entry of entries) await uploadOne(entry);
+    } finally {
+      // Nenhuma falha pode deixar o seletor preso em "Processando…".
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  /** Valida, prepara e envia uma foto. Não lança: falhas viram mensagem na tela. */
+  async function uploadOne({ id, file, previewUrl }: OptimisticPhoto) {
+    try {
       const validationError = await validateImageFile(file);
       if (validationError) {
         setError(validationError);
         discardOptimistic(id, previewUrl);
-        continue;
+        return;
       }
-      try {
-        const { blob, width, height } = await compressPhoto(file);
-        const res = await uploadPhoto(session.cartId, session.editToken, blob, {
-          width,
-          height,
-        });
-        // A foto real já chegou em cart.media — some a prévia para nunca
-        // mostrar as duas ao mesmo tempo.
-        onCartUpdated(res.cart);
-        track("photo_uploaded", { count: res.cart.media.length });
-        discardOptimistic(id, previewUrl);
-      } catch (err) {
-        setError(apiErrorMessage(err, "Não foi possível enviar uma das fotos."));
-        setOptimistic((prev) => prev.map((p) => (p.id === id ? { ...p, status: "error" } : p)));
-      }
+      const photo = await preparePhotoForUpload(file);
+      const dims =
+        photo.width && photo.height ? { width: photo.width, height: photo.height } : undefined;
+      const res = await uploadPhoto(session.cartId, session.editToken, photo.blob, dims);
+      // A foto real já chegou em cart.media — some a prévia para nunca
+      // mostrar as duas ao mesmo tempo.
+      onCartUpdated(res.cart);
+      track("photo_uploaded", { count: res.cart.media.length });
+      discardOptimistic(id, previewUrl);
+    } catch (err) {
+      console.warn("[upload] falha ao enviar foto", err);
+      setError(uploadErrorMessage(err));
+      setOptimistic((prev) => prev.map((p) => (p.id === id ? { ...p, status: "error" } : p)));
     }
-    setBusy(false);
-    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  async function retryUpload(photo: OptimisticPhoto) {
+    setError(null);
+    setOptimistic((prev) =>
+      prev.map((p) => (p.id === photo.id ? { ...p, status: "uploading" } : p)),
+    );
+    setBusy(true);
+    try {
+      await uploadOne(photo);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function remove(id: string) {
@@ -316,6 +353,16 @@ function PhotosField({
                     ✕
                   </button>
                 </div>
+                {p.status === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => retryUpload(p)}
+                    disabled={busy}
+                    className="mt-1 w-full rounded-md border border-rosa/40 bg-white px-1 py-1 text-[11px] font-medium text-vinho transition hover:border-vinho/50 hover:bg-rosa-soft/30 disabled:opacity-50"
+                  >
+                    Tentar de novo
+                  </button>
+                )}
               </div>
             ))}
           </div>
