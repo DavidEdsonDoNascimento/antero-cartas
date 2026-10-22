@@ -128,13 +128,36 @@ function buildUpdateData(input: DraftUpdateInput): Record<string, unknown> {
 
 // --- Mídia -----------------------------------------------------------------
 
+/** `uploadId` vem do cliente: só UUID, para nunca virar outra coisa na chave. */
+const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * `uploadId` (opcional) torna o envio idempotente. Ele entra na chave como
+ * prefixo — `carts/{cartId}/{uploadId}_{uuid do servidor}.{ext}` —, então um
+ * reenvio da mesma foto (resposta perdida numa rede móvel, prazo esgotado no
+ * cliente) encontra a foto já gravada e devolve a carta sem duplicá-la. A
+ * parte imprevisível da URL continua sendo gerada aqui, e o formato segue
+ * casando com STORAGE_KEY_RE. Sem coluna nova: nada muda no banco.
+ */
 export async function addMedia(
   cartId: string,
   token: string | null,
-  file: { body: Buffer; declaredType: string; width?: number; height?: number },
+  file: { body: Buffer; declaredType: string; width?: number; height?: number; uploadId?: string },
 ): Promise<Cart> {
   const row = await loadRowWithToken(cartId, token);
   requireEditable(row.status);
+
+  const uploadId = file.uploadId?.toLowerCase();
+  if (uploadId !== undefined && !UPLOAD_ID_RE.test(uploadId)) {
+    throw new ApiError("invalid", "Identificador de envio inválido.");
+  }
+  if (uploadId) {
+    const existing = await prisma.cartMedia.findFirst({
+      where: { cartId, storageKey: { startsWith: `carts/${cartId}/${uploadId}_` } },
+      select: { id: true },
+    });
+    if (existing) return toDomainCart(await loadRow(cartId));
+  }
 
   if (file.body.byteLength > MAX_UPLOAD_BYTES) {
     throw new ApiError("invalid", "Imagem muito grande.");
@@ -149,7 +172,8 @@ export async function addMedia(
     throw new ApiError("limit_reached", `Máximo de ${MAX_CART_PHOTOS} fotos.`);
   }
 
-  const key = `carts/${cartId}/${randomUUID()}.${extensionForMime(realMime)}`;
+  const name = uploadId ? `${uploadId}_${randomUUID()}` : randomUUID();
+  const key = `carts/${cartId}/${name}.${extensionForMime(realMime)}`;
   const { url } = await getStorage().put({ key, body: file.body, contentType: realMime });
 
   await prisma.cartMedia.create({

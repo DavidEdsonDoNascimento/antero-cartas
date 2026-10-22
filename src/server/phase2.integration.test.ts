@@ -111,6 +111,26 @@ describe.skipIf(!RUN)("Fase 2 — integração com banco real", { timeout: DB_TI
     expect(afterReorder.media.map((m) => m.position)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  it("reenvio com o mesmo uploadId não duplica a foto (retry após resposta perdida)", async () => {
+    const { cart, editToken } = await cartService.createDraft();
+    cartIdsToClean.push(cart.id);
+    const uploadId = "0b6f2c1e-8a4d-4c3b-9e2f-1a2b3c4d5e6f";
+
+    const first = await cartService.addMedia(cart.id, editToken, {
+      body: jpegBytes(),
+      declaredType: "image/jpeg",
+      uploadId,
+    });
+    const retry = await cartService.addMedia(cart.id, editToken, {
+      body: jpegBytes(),
+      declaredType: "image/jpeg",
+      uploadId,
+    });
+    expect(retry.media.map((m) => m.id)).toEqual(first.media.map((m) => m.id));
+    expect(retry.media).toHaveLength(1);
+    expect(retry.media[0].storageKey).toMatch(new RegExp(`^carts/${cart.id}/${uploadId}_`));
+  });
+
   it("persiste o ajuste de enquadramento e o preserva ao reordenar/trocar a capa", async () => {
     const { cart, editToken } = await cartService.createDraft();
     cartIdsToClean.push(cart.id);
