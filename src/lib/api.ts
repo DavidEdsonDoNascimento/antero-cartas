@@ -6,6 +6,7 @@
 
 import type { Cart } from "@/lib/types";
 import type { PhotoFraming } from "@/lib/photoFraming";
+import { extensionForMime } from "@/lib/imageMagic";
 
 const EDIT_TOKEN_HEADER = "x-cart-edit-token";
 
@@ -107,6 +108,13 @@ export function patchCart(
 
 // --- Fotos ---------------------------------------------------------------------
 
+/**
+ * Prazo do envio de uma foto. Sem ele, uma conexão móvel que trava no meio
+ * deixava o upload eternamente em andamento. Folgado de propósito: o
+ * fallback pode mandar o original (até 10 MB) por uma rede lenta.
+ */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
 export function uploadPhoto(
   cartId: string,
   token: string,
@@ -114,12 +122,18 @@ export function uploadPhoto(
   dims?: { width: number; height: number },
 ): Promise<{ cart: Cart }> {
   const form = new FormData();
-  form.append("file", blob, "photo.jpg");
+  // O nome é só informativo: o servidor decide o tipo pelos magic bytes.
+  form.append("file", blob, `photo.${extensionForMime(blob.type)}`);
   if (dims) {
     form.append("width", String(dims.width));
     form.append("height", String(dims.height));
   }
-  return request(`/api/carts/${cartId}/media`, { method: "POST", token, body: form });
+  return request(`/api/carts/${cartId}/media`, {
+    method: "POST",
+    token,
+    body: form,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+  });
 }
 
 export function removePhoto(
