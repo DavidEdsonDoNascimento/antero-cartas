@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Cart, ThemeId } from "@/lib/types";
+import type { Cart, CartMedia, ThemeId } from "@/lib/types";
 import { themes } from "@/content/themes";
 import {
   MAX_CART_PHOTOS,
-  PhotoProcessingError,
+  createPhotoReader,
   preparePhotoForUpload,
-  validateImageFile,
+  type PhotoReader,
+  type PreparedPhoto,
 } from "@/lib/image";
 import {
   uploadPhoto,
@@ -15,8 +16,13 @@ import {
   reorderPhotos,
   updatePhotoFraming,
   ApiClientError,
-  RequestTimeoutError,
 } from "@/lib/api";
+import {
+  classifyUploadError,
+  reportCompressionFallback,
+  reportUploadFailure,
+  type UploadFailure,
+} from "@/lib/uploadDiagnostics";
 import { framingStyle, type PhotoFraming } from "@/lib/photoFraming";
 import type { CartSession } from "@/lib/cartSession";
 import { track } from "@/lib/analytics";
@@ -29,9 +35,16 @@ interface Props {
   update: (patch: Partial<Cart>) => void;
   session: CartSession;
   onCartUpdated: (cart: Cart) => void;
+  /**
+   * Fotos confirmadas pelo servidor após um envio. Só a lista de fotos — não
+   * a carta inteira: a resposta de um upload que levou 40 s não pode desfazer
+   * o tema ou a data escolhidos enquanto isso. Continua valendo depois que a
+   * etapa desmonta (o envio em andamento termina e a foto não se perde).
+   */
+  onMediaChanged: (media: CartMedia[]) => void;
 }
 
-export function StepPersonalize({ cart, update, session, onCartUpdated }: Props) {
+export function StepPersonalize({ cart, update, session, onCartUpdated, onMediaChanged }: Props) {
   return (
     <div>
       <StepHeader
@@ -39,7 +52,12 @@ export function StepPersonalize({ cart, update, session, onCartUpdated }: Props)
         subtitle="Tudo opcional — adicione o que quiser e siga em frente quando estiver pronto."
       />
       <div className="space-y-7">
-        <PhotosField cart={cart} session={session} onCartUpdated={onCartUpdated} />
+        <PhotosField
+          cart={cart}
+          session={session}
+          onCartUpdated={onCartUpdated}
+          onMediaChanged={onMediaChanged}
+        />
         <CounterField cart={cart} update={update} />
         <MusicPicker cart={cart} update={update} />
         <ThemeField cart={cart} update={update} />
@@ -52,130 +70,254 @@ function apiErrorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiClientError ? err.message : fallback;
 }
 
-function uploadErrorMessage(err: unknown): string {
-  if (err instanceof ApiClientError) return err.message;
-  if (err instanceof RequestTimeoutError) {
-    return "O envio da foto demorou demais. Verifique a conexão e toque em “Tentar de novo”.";
+function uploadErrorMessage(failure: UploadFailure, err: unknown): string {
+  switch (failure.stage) {
+    case "validation":
+      return (err as Error).message;
+    case "api":
+      return failure.retryable
+        ? "O servidor não conseguiu salvar a foto agora. Toque em “Tentar de novo”."
+        : (err as Error).message;
+    case "timeout":
+      return failure.detail === "read"
+        ? "A foto está demorando para abrir no aparelho. Toque em “Tentar de novo” — ela continua carregando."
+        : "O envio da foto demorou demais. Verifique a conexão e toque em “Tentar de novo”.";
+    case "read":
+      return "Não foi possível ler esta foto no aparelho. Toque em “Tentar de novo” ou selecione-a outra vez.";
+    case "network":
+      return "Não foi possível enviar a foto. Verifique a conexão e toque em “Tentar de novo”.";
+    default:
+      return "Não foi possível enviar a foto. Toque em “Tentar de novo” ou escolha outra.";
   }
-  if (err instanceof PhotoProcessingError) {
-    return "Não foi possível preparar esta foto. Toque em “Tentar de novo” ou escolha outra.";
-  }
-  // `fetch` rejeita com TypeError quando a conexão cai.
-  return "Não foi possível enviar a foto. Verifique a conexão e toque em “Tentar de novo”.";
 }
 
-/** Prévia local de uma foto ainda em envio — nunca faz parte de cart.media. */
-interface OptimisticPhoto {
+/**
+ * Ciclo de uma foto ainda não confirmada pelo servidor:
+ * na fila → preparando (ler + comprimir) → enviando → (vira item de
+ * cart.media) ou falhou. A prévia local NUNCA significa "enviada": só a
+ * resposta do servidor tira a foto daqui e a coloca em cart.media.
+ */
+type PendingStatus = "queued" | "processing" | "uploading" | "error";
+
+const STATUS_LABEL: Record<PendingStatus, string> = {
+  queued: "Na fila",
+  processing: "Preparando…",
+  uploading: "Enviando…",
+  error: "Falhou",
+};
+
+/** O que a tela mostra de uma foto pendente. */
+interface PendingPhoto {
+  /** Também é o `uploadId` que torna o envio idempotente no servidor. */
   id: string;
-  file: File;
   previewUrl: string;
-  status: "uploading" | "error";
+  status: PendingStatus;
+  /** Em "Falhou": vale oferecer "Tentar de novo"? (recusas definitivas, não) */
+  retryable: boolean;
+  previewBroken?: boolean;
+}
+
+/**
+ * O que a tela não mostra: o arquivo, a leitura (reaproveitada entre
+ * tentativas) e a foto já comprimida — o "Tentar de novo" de uma falha de
+ * rede reenvia exatamente os mesmos bytes, sem reprocessar.
+ */
+interface UploadJob {
+  file: File;
+  reader: PhotoReader;
+  prepared: PreparedPhoto | null;
+  /** Incrementa a cada tentativa; resultado de tentativa antiga é ignorado. */
+  attempt: number;
+  status: PendingStatus;
 }
 
 function PhotosField({
   cart,
   session,
   onCartUpdated,
-}: Pick<Props, "cart" | "session" | "onCartUpdated">) {
+  onMediaChanged,
+}: Pick<Props, "cart" | "session" | "onCartUpdated" | "onMediaChanged">) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [optimistic, setOptimistic] = useState<OptimisticPhoto[]>([]);
+  /** Remoção de uma foto já enviada em andamento. */
+  const [removing, setRemoving] = useState(false);
+  const [pending, setPending] = useState<PendingPhoto[]>([]);
   /** Id da foto cujo enquadramento está sendo ajustado (null = diálogo fechado). */
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
-  const optimisticRef = useRef<OptimisticPhoto[]>([]);
+  /**
+   * Fonte da verdade de "esta tentativa ainda vale?". Remover a foto tira o
+   * job daqui; tentar de novo troca o `attempt`. Toda continuação assíncrona
+   * confere isso antes de mexer na tela.
+   */
+  const jobsRef = useRef(new Map<string, UploadJob>());
+  /**
+   * Envios em série: a posição no servidor segue a ordem de seleção e uma
+   * resposta nunca atropela a outra. Cada item da fila trata os próprios
+   * erros, então a corrente nunca quebra.
+   */
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingRef = useRef<PendingPhoto[]>([]);
   useEffect(() => {
-    optimisticRef.current = optimistic;
-  }, [optimistic]);
+    pendingRef.current = pending;
+  }, [pending]);
 
-  // Evita vazar object URLs se o componente desmontar com uploads em andamento.
+  // Ao sair da etapa: libera as prévias. Envios já na fila terminam sozinhos
+  // e entregam a foto via `onMediaChanged` — sair da etapa não perde foto.
   useEffect(() => {
     return () => {
-      optimisticRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl));
+      pendingRef.current.forEach((p) => URL.revokeObjectURL(p.previewUrl));
     };
   }, []);
 
-  function discardOptimistic(id: string, previewUrl: string) {
-    URL.revokeObjectURL(previewUrl);
-    setOptimistic((prev) => prev.filter((p) => p.id !== id));
+  const uploading = pending.some((p) => p.status !== "error");
+  /** Reordenar/remover/ajustar fotos enviadas espera os envios terminarem. */
+  const busy = removing || uploading;
+
+  function patchPending(id: string, patch: Partial<PendingPhoto>) {
+    setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }
 
-  async function handleFiles(files: FileList | null) {
+  function setJobStatus(id: string, job: UploadJob, status: PendingStatus, retryable = true) {
+    job.status = status;
+    patchPending(id, { status, retryable });
+  }
+
+  /** Tira a foto pendente da tela e cancela o que ainda não começou. */
+  function forgetPending(id: string) {
+    jobsRef.current.delete(id);
+    const photo = pendingRef.current.find((p) => p.id === id);
+    if (photo) URL.revokeObjectURL(photo.previewUrl);
+    setPending((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  /** "✕"/"Remover" numa foto pendente; a mensagem de erro sai junto com a última falha. */
+  function discardPending(id: string) {
+    if (!pendingRef.current.some((p) => p.id !== id && p.status === "error")) setError(null);
+    forgetPending(id);
+  }
+
+  function enqueue(id: string, attempt: number) {
+    queueRef.current = queueRef.current.then(() => runUpload(id, attempt)).catch(() => {});
+  }
+
+  function handleFiles(files: FileList | null) {
     if (!files) return;
     setError(null);
 
-    const remaining = MAX_CART_PHOTOS - cart.media.length - optimistic.length;
+    const remaining = MAX_CART_PHOTOS - cart.media.length - pending.length;
     const chosen = Array.from(files).slice(0, Math.max(0, remaining));
     if (files.length > chosen.length) {
       setError(`Você pode adicionar no máximo ${MAX_CART_PHOTOS} fotos.`);
     }
-    if (chosen.length === 0) {
-      if (inputRef.current) inputRef.current.value = "";
-      return;
-    }
+    // Os `File` já estão em mãos; limpar agora permite escolher a mesma foto
+    // de novo e não invalida as referências.
+    if (inputRef.current) inputRef.current.value = "";
+    if (chosen.length === 0) return;
 
-    // Prévia otimista imediata — aparece antes de validar, comprimir ou
-    // enviar. É isso que elimina a demora percebida entre selecionar a foto
-    // e vê-la na tela (o pipeline em si não muda).
-    const entries: OptimisticPhoto[] = chosen.map((file) => ({
-      id: crypto.randomUUID(),
-      file,
-      previewUrl: URL.createObjectURL(file),
-      status: "uploading",
-    }));
-    setOptimistic((prev) => [...prev, ...entries]);
-
-    setBusy(true);
-    try {
-      for (const entry of entries) await uploadOne(entry);
-    } finally {
-      // Nenhuma falha pode deixar o seletor preso em "Processando…".
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
+    // Prévia otimista imediata — aparece antes de ler, comprimir ou enviar.
+    const entries: PendingPhoto[] = chosen.map((file) => {
+      const id = crypto.randomUUID();
+      const reader = createPhotoReader(file);
+      // Lê já, enquanto o Android ainda garante o acesso ao arquivo recém-
+      // escolhido — não quando chegar a vez desta foto na fila.
+      reader.prefetch();
+      jobsRef.current.set(id, { file, reader, prepared: null, attempt: 1, status: "queued" });
+      return { id, previewUrl: URL.createObjectURL(file), status: "queued", retryable: true };
+    });
+    setPending((prev) => [...prev, ...entries]);
+    for (const entry of entries) enqueue(entry.id, 1);
   }
 
-  /** Valida, prepara e envia uma foto. Não lança: falhas viram mensagem na tela. */
-  async function uploadOne({ id, file, previewUrl }: OptimisticPhoto) {
+  /** Lê, prepara e envia uma foto. Não lança: falhas viram "Falhou" na tela. */
+  async function runUpload(id: string, attempt: number) {
+    const job = jobsRef.current.get(id);
+    if (!job || job.attempt !== attempt) return; // removida enquanto esperava
+    const isCurrent = () => jobsRef.current.get(id) === job && job.attempt === attempt;
+    const ctx = { attempt, mime: job.file.type, sizeBytes: job.file.size, original: false };
+
     try {
-      const validationError = await validateImageFile(file);
-      if (validationError) {
-        setError(validationError);
-        discardOptimistic(id, previewUrl);
-        return;
+      if (!job.prepared) {
+        setJobStatus(id, job, "processing");
+        const source = await job.reader.read();
+        if (!isCurrent()) return;
+        const prepared = await preparePhotoForUpload(source);
+        if (prepared.original) reportCompressionFallback(prepared.fallbackError, ctx);
+        if (!isCurrent()) return;
+        job.prepared = prepared;
       }
-      const photo = await preparePhotoForUpload(file);
+      const photo = job.prepared;
+      ctx.original = photo.original;
+      ctx.sizeBytes = photo.blob.size;
+
+      setJobStatus(id, job, "uploading");
       const dims =
         photo.width && photo.height ? { width: photo.width, height: photo.height } : undefined;
-      const res = await uploadPhoto(session.cartId, session.editToken, photo.blob, dims);
-      // A foto real já chegou em cart.media — some a prévia para nunca
-      // mostrar as duas ao mesmo tempo.
-      onCartUpdated(res.cart);
+      const res = await uploadPhoto(session.cartId, session.editToken, photo.blob, dims, id);
+
+      if (!isCurrent()) {
+        // Removida enquanto subia: o servidor já gravou. Apaga lá também, em
+        // vez de a foto reaparecer na próxima resposta.
+        await deleteOrphan(id, res.cart.media);
+        return;
+      }
+      // A foto real chegou em cart.media — some a prévia na mesma renderização.
+      onMediaChanged(res.cart.media);
       track("photo_uploaded", { count: res.cart.media.length });
-      discardOptimistic(id, previewUrl);
+      forgetPending(id);
+      settleConfirmedFailures(res.cart.media);
     } catch (err) {
-      console.warn("[upload] falha ao enviar foto", err);
-      setError(uploadErrorMessage(err));
-      setOptimistic((prev) => prev.map((p) => (p.id === id ? { ...p, status: "error" } : p)));
+      if (!isCurrent()) return;
+      const failure = classifyUploadError(err);
+      reportUploadFailure(failure, ctx);
+      // A foto continua na tela, com "Tentar de novo" e "Remover".
+      setJobStatus(id, job, "error", failure.retryable);
+      setError(uploadErrorMessage(failure, err));
     }
   }
 
-  async function retryUpload(photo: OptimisticPhoto) {
-    setError(null);
-    setOptimistic((prev) =>
-      prev.map((p) => (p.id === photo.id ? { ...p, status: "uploading" } : p)),
-    );
-    setBusy(true);
-    try {
-      await uploadOne(photo);
-    } finally {
-      setBusy(false);
+  /**
+   * Uma foto marcada "Falhou" pode ter sido gravada mesmo assim (a resposta
+   * se perdeu na rede). Se a lista do servidor já a traz — pelo `uploadId` na
+   * chave —, ela foi enviada: tira a prévia em vez de mostrar a mesma foto
+   * duas vezes, uma delas como falha.
+   */
+  function settleConfirmedFailures(media: CartMedia[]) {
+    for (const [pendingId, job] of jobsRef.current) {
+      if (job.status !== "error") continue;
+      if (media.some((m) => m.storageKey?.includes(`/${pendingId}_`))) discardPending(pendingId);
     }
+  }
+
+  async function deleteOrphan(uploadId: string, media: CartMedia[]) {
+    const orphan = media.find((m) => m.storageKey?.includes(`/${uploadId}_`));
+    try {
+      if (!orphan) {
+        onMediaChanged(media);
+        return;
+      }
+      const res = await removePhoto(session.cartId, session.editToken, orphan.id);
+      onMediaChanged(res.cart.media);
+    } catch (err) {
+      // Se não deu para apagar, mostra a foto: o usuário remove de novo, e
+      // ela não fica escondida no servidor aparecendo depois.
+      console.warn("[upload] não foi possível remover a foto descartada", classifyUploadError(err));
+      onMediaChanged(media);
+    }
+  }
+
+  function retryUpload(id: string) {
+    const job = jobsRef.current.get(id);
+    // Só a partir de "Falhou": um duplo toque não dispara dois envios.
+    if (!job || job.status !== "error") return;
+    setError(null);
+    job.attempt += 1;
+    setJobStatus(id, job, "queued");
+    enqueue(id, job.attempt);
   }
 
   async function remove(id: string) {
     setError(null);
-    setBusy(true);
+    setRemoving(true);
     try {
       const res = await removePhoto(session.cartId, session.editToken, id);
       onCartUpdated(res.cart);
@@ -183,7 +325,7 @@ function PhotosField({
     } catch (err) {
       setError(apiErrorMessage(err, "Não foi possível remover a foto."));
     } finally {
-      setBusy(false);
+      setRemoving(false);
     }
   }
 
@@ -243,7 +385,7 @@ function PhotosField({
     persistOrder([id, ...ids]);
   }
 
-  const totalCount = cart.media.length + optimistic.length;
+  const totalCount = cart.media.length + pending.length;
   // Busca por id, nunca por índice: uma remoção ou reordenação enquanto o
   // diálogo está aberto não pode fazê-lo passar a editar outra foto.
   const adjustingPhoto = cart.media.find((m) => m.id === adjustingId) ?? null;
@@ -252,7 +394,7 @@ function PhotosField({
     <div>
       <FieldLabel hint="opcional">Fotos (até {MAX_CART_PHOTOS})</FieldLabel>
       <div className="space-y-3">
-        {(cart.media.length > 0 || optimistic.length > 0) && (
+        {(cart.media.length > 0 || pending.length > 0) && (
           <div className="flex flex-wrap gap-3">
             {cart.media.map((m, i) => (
               <div key={m.id} className="w-24">
@@ -322,31 +464,40 @@ function PhotosField({
               </div>
             ))}
 
-            {optimistic.map((p) => (
-              <div key={p.id} className="w-24">
+            {pending.map((p) => (
+              <div key={p.id} className="w-24" data-pending-status={p.status}>
                 <div className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={p.previewUrl}
-                    alt="Enviando foto…"
-                    className={`h-24 w-24 rounded-lg object-cover shadow ${
-                      p.status === "uploading" ? "opacity-60" : "opacity-70"
-                    }`}
-                  />
-                  {p.status === "uploading" ? (
-                    <span
-                      aria-label="Enviando foto…"
-                      className="absolute inset-0 flex items-center justify-center"
-                    >
+                  {p.previewBroken ? (
+                    // A prévia é só local: não abrir aqui não impede o envio.
+                    <div className="flex h-24 w-24 items-center justify-center rounded-lg bg-rosa-soft/40 text-2xl shadow">
+                      🖼️
+                    </div>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={p.previewUrl}
+                      alt={`Foto ${STATUS_LABEL[p.status].toLowerCase()}`}
+                      onError={() => patchPending(p.id, { previewBroken: true })}
+                      className={`h-24 w-24 rounded-lg object-cover shadow ${
+                        p.status === "error" ? "opacity-70" : "opacity-60"
+                      }`}
+                    />
+                  )}
+                  {p.status !== "error" && (
+                    <span aria-hidden className="absolute inset-0 flex items-center justify-center">
                       <span className="h-6 w-6 animate-spin rounded-full border-2 border-white border-t-transparent" />
                     </span>
-                  ) : (
-                    <span className="absolute inset-x-0 bottom-0 rounded-b-lg bg-vinho/85 px-1 py-0.5 text-center text-[10px] font-medium text-creme">
-                      Falhou
-                    </span>
                   )}
+                  <span
+                    role="status"
+                    className={`absolute inset-x-0 bottom-0 rounded-b-lg px-1 py-0.5 text-center text-[10px] font-medium ${
+                      p.status === "error" ? "bg-vinho/85 text-creme" : "bg-grafite/60 text-white"
+                    }`}
+                  >
+                    {STATUS_LABEL[p.status]}
+                  </span>
                   <button
-                    onClick={() => discardOptimistic(p.id, p.previewUrl)}
+                    onClick={() => discardPending(p.id)}
                     aria-label="Remover esta foto"
                     className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-grafite text-xs text-white shadow"
                   >
@@ -354,14 +505,24 @@ function PhotosField({
                   </button>
                 </div>
                 {p.status === "error" && (
-                  <button
-                    type="button"
-                    onClick={() => retryUpload(p)}
-                    disabled={busy}
-                    className="mt-1 w-full rounded-md border border-rosa/40 bg-white px-1 py-1 text-[11px] font-medium text-vinho transition hover:border-vinho/50 hover:bg-rosa-soft/30 disabled:opacity-50"
-                  >
-                    Tentar de novo
-                  </button>
+                  <div className="mt-1 space-y-1">
+                    {p.retryable && (
+                      <button
+                        type="button"
+                        onClick={() => retryUpload(p.id)}
+                        className="w-full rounded-md border border-rosa/40 bg-white px-1 py-1 text-[11px] font-medium text-vinho transition hover:border-vinho/50 hover:bg-rosa-soft/30"
+                      >
+                        Tentar de novo
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => discardPending(p.id)}
+                      className="w-full rounded-md px-1 py-0.5 text-[11px] text-grafite/60 hover:underline"
+                    >
+                      Remover
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
