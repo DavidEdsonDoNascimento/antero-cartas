@@ -2,6 +2,7 @@ import { removeMedia, updateMediaFraming } from "@/server/cartService";
 import { mediaFramingSchema } from "@/server/schemas";
 import { jsonError, jsonOk, ApiError } from "@/server/errors";
 import { readEditToken } from "@/server/editTokenHeader";
+import { assertNotInMaintenance } from "@/server/maintenance";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; mediaId: string }> },
 ): Promise<Response> {
   try {
+    assertNotInMaintenance();
     const { id, mediaId } = await params;
     const cart = await removeMedia(id, readEditToken(req), mediaId);
     return jsonOk({ cart });
@@ -28,6 +30,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; mediaId: string }> },
 ): Promise<Response> {
   try {
+    assertNotInMaintenance();
     const { id, mediaId } = await params;
     const raw = await req.json().catch(() => {
       throw new ApiError("invalid", "Corpo da requisição inválido.");

@@ -1,0 +1,164 @@
+# Imagem Docker do Antero Cartas para o Coolify (docs/0011). Nunca faz deploy.
+#
+# Gatilhos
+# - push na branch feat/coolify-hosting-preparation: constrói a imagem de
+#   HOMOLOGAÇÃO. Existe porque um workflow só com `workflow_dispatch` precisa
+#   estar na branch padrão para poder ser acionado — e a branch ainda não foi
+#   mesclada. Nenhum outro push, PR ou merge dispara este workflow.
+# - workflow_dispatch: depois que o arquivo estiver na branch padrão, permite
+#   escolher o ambiente manualmente (inclusive producao).
+#
+# Publicação no GHCR
+# - Só acontece quando a variável do ambiente/repositório GHCR_PUBLISH for
+#   exatamente "true" (Settings → Environments → homologacao → Variables) e, no
+#   disparo manual, a opção `publicar` estiver marcada. Sem isso o job só
+#   valida e constrói (sem push).
+# - Autentica com o GITHUB_TOKEN do próprio run; nenhum segredo a configurar.
+# - Tag imutável: <ambiente>-<sha completo do commit>.
+#
+# Isolamento
+# - Segredos de runtime (banco, Mercado Pago, Resend...) NÃO existem aqui: o
+#   job só usa variáveis públicas/de build da Environment escolhida. A imagem
+#   de homologação carrega o domínio e as chaves públicas de homologação
+#   embutidos e não deve ser usada em produção; cada ambiente tem a sua.
+name: Imagem Docker
+
+on:
+  push:
+    branches: [feat/coolify-hosting-preparation]
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: "Ambiente (define as variáveis de build e a tag)"
+        type: choice
+        options: [homologacao, producao]
+        default: homologacao
+      publicar:
+        description: "Publicar no GHCR (também exige GHCR_PUBLISH=true)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ inputs.ambiente || 'homologacao' }}
+  cancel-in-progress: true
+
+env:
+  AMBIENTE: ${{ inputs.ambiente || 'homologacao' }}
+
+jobs:
+  verificar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pnpm (versão do package.json)
+        run: corepack enable && corepack prepare --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - name: Testes (unitários + integração em PostgreSQL 17 descartável)
+        run: pnpm test:integration:pg17
+
+  imagem:
+    needs: verificar
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.ambiente || 'homologacao' }}
+    permissions:
+      contents: read
+      packages: write # só usado quando a publicação está habilitada
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir variáveis de build do ambiente
+        env:
+          APP_ENV: ${{ vars.APP_ENV }}
+          SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          PAYMENT_MODE: ${{ vars.PAYMENT_MODE }}
+          NEXT_PUBLIC_PAYMENT_MODE: ${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
+          ALLOW_MOCK: ${{ vars.NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ -n "$APP_ENV" ] && [ -n "$SITE_URL" ] || fail "Environment '$AMBIENTE' sem APP_ENV/NEXT_PUBLIC_SITE_URL (Settings → Environments → $AMBIENTE → Variables)."
+          [ "$PAYMENT_MODE" = "$NEXT_PUBLIC_PAYMENT_MODE" ] || fail "PAYMENT_MODE e NEXT_PUBLIC_PAYMENT_MODE divergem."
+          host="${SITE_URL#*://}"; host="${host%%[/:]*}"
+          if [ "$AMBIENTE" = "homologacao" ]; then
+            [ "$host" != "cartas.anterosistemas.com.br" ] || fail "Homologação não pode usar o domínio de produção."
+          else
+            [ "$host" = "cartas.anterosistemas.com.br" ] || fail "Produção deve usar cartas.anterosistemas.com.br."
+            [ -z "$ALLOW_MOCK" ] || fail "Produção não pode definir NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION."
+            [ "$PAYMENT_MODE" = "real" ] || fail "Produção exige PAYMENT_MODE=real."
+          fi
+
+      - name: Nome, tag imutável e decisão de publicar
+        id: meta
+        env:
+          GHCR_PUBLISH: ${{ vars.GHCR_PUBLISH }}
+          PUBLICAR_INPUT: ${{ inputs.publicar }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=ghcr.io/${owner}/antero-cartas" >> "$GITHUB_OUTPUT"
+          echo "tag=${AMBIENTE}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          publish=false
+          if [ "$GHCR_PUBLISH" = "true" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$PUBLICAR_INPUT" = "true" ]; then publish=true; fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login no GHCR
+        if: steps.meta.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (publica só se autorizado)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ steps.meta.outputs.publish == 'true' }}
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+            APP_ENV=${{ vars.APP_ENV }}
+            PAYMENT_MODE=${{ vars.PAYMENT_MODE }}
+            NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
+            NEXT_PUBLIC_WHATSAPP_SUPPORT=${{ vars.NEXT_PUBLIC_WHATSAPP_SUPPORT }}
+            NEXT_PUBLIC_MAX_CART_PHOTOS=${{ vars.NEXT_PUBLIC_MAX_CART_PHOTOS }}
+            NEXT_PUBLIC_PLAN_LIMITED_PRICE=${{ vars.NEXT_PUBLIC_PLAN_LIMITED_PRICE }}
+            NEXT_PUBLIC_PLAN_PERMANENT_PRICE=${{ vars.NEXT_PUBLIC_PLAN_PERMANENT_PRICE }}
+            NEXT_PUBLIC_PLAN_LIMITED_DURATION_DAYS=${{ vars.NEXT_PUBLIC_PLAN_LIMITED_DURATION_DAYS }}
+            NEXT_PUBLIC_YOUTUBE_SEARCH_ENABLED=${{ vars.NEXT_PUBLIC_YOUTUBE_SEARCH_ENABLED }}
+            NEXT_PUBLIC_PAYMENT_MODE=${{ vars.NEXT_PUBLIC_PAYMENT_MODE }}
+            NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION=${{ vars.NEXT_PUBLIC_ALLOW_MOCK_PAYMENT_CONFIRMATION }}
+            NEXT_PUBLIC_MERCADOPAGO_PUBLIC_KEY=${{ vars.NEXT_PUBLIC_MERCADOPAGO_PUBLIC_KEY }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ vars.NEXT_PUBLIC_SENTRY_DSN }}
+            NEXT_PUBLIC_ANALYTICS_ENABLED=${{ vars.NEXT_PUBLIC_ANALYTICS_ENABLED }}
+
+      - name: Resumo
+        env:
+          PUBLISHED: ${{ steps.meta.outputs.publish }}
+          IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            if [ "$PUBLISHED" = "true" ]; then echo "### Imagem publicada"; else echo "### Imagem construída (NÃO publicada — GHCR_PUBLISH != true)"; fi
+            echo ""
+            echo "- Tag: \`$IMAGE\`"
+            echo "- Digest: \`$DIGEST\`"
+            echo "- Ambiente: \`$AMBIENTE\` — não reutilize em outro ambiente (NEXT_PUBLIC_* e CSP fixados no build)."
+            echo "- Nenhum deploy foi feito; no Coolify referencie o digest."
+          } >> "$GITHUB_STEP_SUMMARY"

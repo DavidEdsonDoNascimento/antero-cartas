@@ -202,6 +202,17 @@ A aplicação está publicada na Vercel. O domínio definitivo será
 Procedimentos operacionais (deploy, migrations, DNS, backup, limpeza de dados
 de teste, rollback) estão no runbook de produção.
 
+## Hospedagem em contêiner (Docker / Coolify)
+
+Preparação para migrar da Vercel + Supabase para o Coolify — **a produção
+continua na Vercel até o cutover**. Guia completo: `docs/0011_Hospedagem_Coolify.md`.
+
+```bash
+docker compose -f compose.local.yaml up -d --build   # app + PostgreSQL 17 locais
+curl -s http://127.0.0.1:3100/api/health
+pnpm test:integration:pg17                            # suíte completa em PostgreSQL 17 descartável
+```
+
 ## Documentação
 - [`docs/0001_Product_Brief.md`](docs/0001_Product_Brief.md) — problema, público, valor, jornada
 - [`docs/0002_MVP_Plan.md`](docs/0002_MVP_Plan.md) — fases e critérios de aceite
@@ -209,6 +220,7 @@ de teste, rollback) estão no runbook de produção.
 - [`docs/0004_Decisions.md`](docs/0004_Decisions.md) — decisões e valores provisórios
 - [`docs/0005_ChangeLog.md`](docs/0005_ChangeLog.md) — histórico de mudanças
 - [`docs/0006_Runbook_Producao.md`](docs/0006_Runbook_Producao.md) — runbook de produção, checklist manual, Mercado Pago e Resend
+- [`docs/0011_Hospedagem_Coolify.md`](docs/0011_Hospedagem_Coolify.md) — imagem Docker, Coolify, migrations, fotos em volume, manutenção e rollback
 - [`docs/0008_Handoff_Fase2_5_Final.md`](docs/0008_Handoff_Fase2_5_Final.md) — estado final da Fase 2.5
 - [`docs/tasks/013_fase_3.md`](docs/tasks/013_fase_3.md) — escopo da Fase 3 (pagamento e e-mail reais)
 - [`docs/tasks-pending/`](docs/tasks-pending/) — tarefas técnicas conhecidas e deliberadamente adiadas, com gatilho de retomada

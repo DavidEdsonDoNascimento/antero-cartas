@@ -1,5 +1,40 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Migração] — Preparação para Docker/Coolify (branch, sem deploy) — 2026-10-21
+
+Fase 2 da migração Vercel + Supabase → Coolify (docs/0011, D67–D72). A
+produção continua na Vercel + Supabase, sem mudança de comportamento.
+
+### Adicionado
+- `Dockerfile` multi-stage (Node 24 bookworm, pnpm 11.18, standalone, usuário
+  `node`, `HEALTHCHECK`), `.dockerignore`, `docker/entrypoint.sh`,
+  `docker/build-app.sh` (lista fechada de variáveis de build).
+- `scripts/migrateDeploy.mjs` + `docker/migrate/`: migrations no início do
+  contêiner, falha fecha, recusa Supabase. `pnpm db:deploy`.
+- `GET /api/health` (banco + volume; `?probe=live`).
+- Modo de manutenção (`MAINTENANCE_MODE`): 503 + `Retry-After` em toda
+  escrita e no webhook do Mercado Pago.
+- `MEDIA_URL_STRATEGY` (`stored` padrão | `storage_key`).
+- `compose.local.yaml` (app + PostgreSQL 17 locais), `pnpm test:integration:pg17`,
+  workflow manual `.github/workflows/docker-image.yml`.
+
+### Alterado
+- Provider de disco: escrita atômica, `check()` para o health check e
+  anotações `turbopackIgnore` — o build deixou de rastrear o projeto inteiro.
+- `next.config.ts`: `output: "standalone"` só com `NEXT_OUTPUT_STANDALONE=true`.
+
+### Validado
+- lint, typecheck, `pnpm test` (730 passando, 83 pulados) e
+  `pnpm test:integration:pg17` (813/813 em PostgreSQL 17.11 convencional).
+- Imagem: migrations em banco vazio, idempotência, migration falhada/inválida
+  impede o start, recusa Supabase, recusa sem volume, persistência de fotos
+  e dados após recriar o contêiner e após `down`/`up`, manutenção, SIGTERM,
+  path traversal, headers de produção, nenhum segredo no bundle.
+
+### Não executado
+- Nada na VPS, no Coolify, no Supabase, na Vercel, na Cloudflare ou no
+  Mercado Pago. Sem commit, push ou publicação de imagem.
+
 ## [Fase 3] — Pagamento e e-mail reais: Mercado Pago + Resend (código, sandbox ainda não validado) — 2026-07-29
 
 Início da Fase 3 (task 013), autônomo até o primeiro checkpoint humano real

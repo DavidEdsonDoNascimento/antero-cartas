@@ -2,6 +2,7 @@ import { z } from "zod";
 import { mockConfirmOrder } from "@/server/orderService";
 import { jsonError, jsonOk, ApiError } from "@/server/errors";
 import { track } from "@/lib/analytics";
+import { assertNotInMaintenance } from "@/server/maintenance";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   try {
+    assertNotInMaintenance();
     const { id } = await params;
     const raw = await req.json().catch(() => ({}));
     const parsed = bodySchema.safeParse(raw);

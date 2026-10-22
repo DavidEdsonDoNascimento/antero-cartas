@@ -4,6 +4,7 @@ import { jsonError, jsonOk, ApiError } from "@/server/errors";
 import { readEditToken } from "@/server/editTokenHeader";
 import { track } from "@/lib/analytics";
 import { createInMemoryRateLimiter, clientKey } from "@/lib/rateLimit";
+import { assertNotInMaintenance } from "@/server/maintenance";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,7 @@ const limiter = createInMemoryRateLimiter(20, 60_000);
 
 export async function POST(req: Request): Promise<Response> {
   try {
+    assertNotInMaintenance();
     const gate = limiter.check(clientKey(req));
     if (!gate.allowed) {
       throw new ApiError("rate_limited", "Muitos pedidos em pouco tempo. Aguarde um instante.");

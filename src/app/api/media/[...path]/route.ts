@@ -4,9 +4,15 @@ import { STORAGE_KEY_RE } from "@/server/storage/StorageProvider";
 export const dynamic = "force-dynamic";
 
 /**
- * Serve os arquivos do StorageProvider local (dev). Em produção com S3/R2,
- * as fotos são servidas diretamente pelo storage e esta rota deixa de ser
- * necessária — getPublicUrl() já aponta para lá nesse caso.
+ * Serve os arquivos do StorageProvider local: em desenvolvimento e, com
+ * volume persistente, na hospedagem em contêiner (docs/0011). Com o Supabase
+ * Storage (produção atual), getPublicUrl() aponta direto para o bucket e esta
+ * rota não é usada.
+ *
+ * Segurança: só chaves `carts/{id}/{uuid}.{jpg|png|webp}` (STORAGE_KEY_RE) e
+ * o provider ainda confere que o caminho resolvido fica dentro do diretório
+ * base. Mesmo modelo do bucket público: quem conhece a URL (UUID de 122 bits)
+ * vê a foto; não há listagem.
  */
 export async function GET(
   _req: Request,
@@ -26,6 +32,7 @@ export async function GET(
     status: 200,
     headers: {
       "content-type": file.contentType,
+      "content-length": String(file.body.byteLength),
       "cache-control": "public, max-age=31536000, immutable",
     },
   });

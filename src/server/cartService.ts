@@ -7,7 +7,8 @@ type Db = typeof prisma | Prisma.TransactionClient;
 import { generateEditToken, hashEditToken, verifyEditToken } from "@/lib/editToken";
 import { generateSlug } from "@/lib/slug";
 import { computeExpiresAt, isExpired } from "@/lib/expiry";
-import { dbToDomainCart, type DbCartRow } from "@/lib/cartMapping";
+import { type DbCartRow } from "@/lib/cartMapping";
+import { toDomainCart } from "@/server/cartDto";
 import { MAX_CART_PHOTOS, MAX_UPLOAD_BYTES } from "@/lib/limits";
 import { ALLOWED_IMAGE_MIME, extensionForMime, sniffImageMime } from "@/lib/imageMagic";
 import { getStorage } from "@/server/storage";
@@ -54,12 +55,12 @@ export async function createDraft(
   const editToken = generateEditToken();
   const data = { editTokenHash: hashEditToken(editToken), ...buildUpdateData(initial ?? {}) };
   const row = await prisma.cart.create({ data, include: cartInclude });
-  return { cart: dbToDomainCart(row as unknown as DbCartRow), editToken };
+  return { cart: toDomainCart(row as unknown as DbCartRow), editToken };
 }
 
 export async function getCartForEdit(cartId: string, token: string | null): Promise<Cart> {
   const row = await loadRowWithToken(cartId, token);
-  return dbToDomainCart(row);
+  return toDomainCart(row);
 }
 
 export async function updateDraft(
@@ -74,7 +75,7 @@ export async function updateDraft(
     data: buildUpdateData(input),
     include: cartInclude,
   });
-  return dbToDomainCart(updated as unknown as DbCartRow);
+  return toDomainCart(updated as unknown as DbCartRow);
 }
 
 /** Monta o objeto de atualização apenas com as chaves realmente enviadas. */
@@ -165,7 +166,7 @@ export async function addMedia(
     },
   });
 
-  return dbToDomainCart(await loadRow(cartId));
+  return toDomainCart(await loadRow(cartId));
 }
 
 function clampDim(n: number | undefined): number | null {
@@ -208,7 +209,7 @@ export async function removeMedia(
     console.error(`[storage] falha ao remover ${media.storageKey}:`, err);
   }
 
-  return dbToDomainCart(await loadRow(cartId));
+  return toDomainCart(await loadRow(cartId));
 }
 
 /**
@@ -252,7 +253,7 @@ export async function updateMediaFraming(
     },
   });
 
-  return dbToDomainCart(await loadRow(cartId));
+  return toDomainCart(await loadRow(cartId));
 }
 
 export async function reorderMedia(
@@ -273,7 +274,7 @@ export async function reorderMedia(
       prisma.cartMedia.update({ where: { id }, data: { position: i } }),
     ),
   );
-  return dbToDomainCart(await loadRow(cartId));
+  return toDomainCart(await loadRow(cartId));
 }
 
 // --- Publicação ------------------------------------------------------------
@@ -389,5 +390,5 @@ export async function getPublicCart(slug: string): Promise<PublicCartResult> {
   if (!row || row.status !== "PUBLISHED") return { state: "not_found" };
   if (isExpired(row.expiresAt)) return { state: "expired" };
   if (await findReversedOrderStatus(row.id)) return { state: "not_found" };
-  return { state: "ok", cart: dbToDomainCart(row as unknown as DbCartRow) };
+  return { state: "ok", cart: toDomainCart(row as unknown as DbCartRow) };
 }

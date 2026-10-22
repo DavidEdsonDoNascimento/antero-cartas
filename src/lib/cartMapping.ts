@@ -77,14 +77,23 @@ function toMusic(row: DbCartRow): SelectedMusic | null {
   };
 }
 
-export function dbToDomainCart(row: DbCartRow): Cart {
+export interface DomainCartOptions {
+  /**
+   * Resolve a URL pública de cada foto. Sem ele, usa `CartMedia.url` como foi
+   * gravada. O servidor injeta `resolveMediaUrl` (src/server/storage/mediaUrl.ts)
+   * — este módulo continua sem depender de storage/Node.
+   */
+  resolveMediaUrl?: (media: DbMediaRow) => string;
+}
+
+export function dbToDomainCart(row: DbCartRow, options: DomainCartOptions = {}): Cart {
   const media: CartMedia[] = [...row.media]
     .sort((a, b) => a.position - b.position)
     .map((m) => ({
       id: m.id,
       cartId: m.cartId,
       type: "photo",
-      url: m.url,
+      url: options.resolveMediaUrl ? options.resolveMediaUrl(m) : m.url,
       storageKey: m.storageKey,
       position: m.position,
       framing: toFraming(m),

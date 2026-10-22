@@ -1,0 +1,35 @@
+# Contexto de build da imagem (Dockerfile). Nada de segredo, dado local ou
+# artefato de build entra na imagem.
+
+# Segredos e configuração local — NUNCA na imagem
+.env*
+.vercel
+.claude
+*.pem
+
+# Dependências e artefatos gerados (são recriados no build)
+node_modules
+docker/migrate/node_modules
+.next
+out
+build
+coverage
+*.tsbuildinfo
+next-env.d.ts
+src/generated
+
+# Dados locais (uploads de desenvolvimento, dumps)
+.data
+*.dump
+*.sql.gz
+
+# Não usados no build
+.git
+.github
+docs
+claude-reports
+supabase
+Dockerfile
+.dockerignore
+compose*.yaml
+*.log

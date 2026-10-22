@@ -11,6 +11,7 @@ export type ApiErrorCode =
   | "limit_reached"
   | "mock_disabled"
   | "rate_limited"
+  | "maintenance"
   | "server";
 
 const STATUS: Record<ApiErrorCode, number> = {
@@ -22,7 +23,17 @@ const STATUS: Record<ApiErrorCode, number> = {
   limit_reached: 409,
   mock_disabled: 403,
   rate_limited: 429,
+  maintenance: 503,
   server: 500,
+};
+
+/**
+ * `Retry-After` (segundos) dos códigos temporários. Hoje só a manutenção
+ * (src/server/maintenance.ts): diz ao navegador e ao Mercado Pago que vale
+ * tentar de novo, em vez de tratar a falha como definitiva.
+ */
+export const RETRY_AFTER_SECONDS: Partial<Record<ApiErrorCode, number>> = {
+  maintenance: 120,
 };
 
 export class ApiError extends Error {
@@ -40,9 +51,15 @@ export function jsonError(err: unknown): Response {
   if (err instanceof ApiError) {
     // Erro esperado do domínio: código e mensagem já foram escritos para
     // serem lidos pelo usuário. Não é ruído de servidor, então não loga.
+    const retryAfter = RETRY_AFTER_SECONDS[err.code];
     return Response.json(
       { error: { code: err.code, message: err.message } },
-      { status: err.status },
+      {
+        status: err.status,
+        ...(retryAfter
+          ? { headers: { "retry-after": String(retryAfter), "cache-control": "no-store" } }
+          : {}),
+      },
     );
   }
 

@@ -6,7 +6,8 @@ import { getPlan } from "@/config/plans";
 import { site } from "@/config/site";
 import { buildPublicCartUrl } from "@/lib/publicUrl";
 import { publishCartWithClient } from "@/server/cartService";
-import { dbToDomainCart, type DbCartRow } from "@/lib/cartMapping";
+import { type DbCartRow } from "@/lib/cartMapping";
+import { toDomainCart } from "@/server/cartDto";
 import {
   getPaymentProvider,
   isMockConfirmationAllowed,
@@ -1040,7 +1041,7 @@ async function finalizeOrderAsPaid(order: {
   });
   if (!publishedRow) return false;
 
-  const cart = dbToDomainCart(publishedRow as unknown as DbCartRow);
+  const cart = toDomainCart(publishedRow as unknown as DbCartRow);
   const publicUrl = buildPublicCartUrl(cart.slug!);
   const qrCodeDataUrl = await generateQrDataUrl(publicUrl);
 
@@ -1317,7 +1318,7 @@ async function buildResultFromExisting(existing: {
     where: { id: existing.cartId },
     include: cartInclude,
   });
-  const cart = cartRow ? dbToDomainCart(cartRow as unknown as DbCartRow) : null;
+  const cart = cartRow ? toDomainCart(cartRow as unknown as DbCartRow) : null;
   const publicUrl = cart?.slug ? buildPublicCartUrl(cart.slug) : null;
   const qrCodeDataUrl = publicUrl ? await generateQrDataUrl(publicUrl) : null;
   return { order: toSummary(order), cart, publicUrl, qrCodeDataUrl };

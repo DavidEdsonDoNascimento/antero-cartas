@@ -1,0 +1,7 @@
+# Projeto isolado (não faz parte do app): só o Prisma CLI + dotenv + pg para
+# `prisma migrate deploy` dentro da imagem. Ver docs/0011.
+allowBuilds:
+  '@prisma/engines': true
+  prisma: true
+# O Prisma CLI declara peers do Studio (react etc.) que o migrate não usa.
+autoInstallPeers: false
