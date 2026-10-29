@@ -13,6 +13,8 @@
 - Testes: `src/server/coolifyDeploy.test.ts` (API simulada) e
   `src/server/ciWorkflows.test.ts` (estrutura dos YAML e lógica de decisão).
 - Docs: `0011` §13. Sem mudança em banco, volumes, domínio ou variáveis de runtime.
+- Deploy automático protegido por `AUTO_DEPLOY_ENABLED=true` (Environment
+  `producao`); sem ela o push na `master` só publica a imagem e o resumo avisa.
 
 ## [Migração] — Preparação para Docker/Coolify (branch, sem deploy) — 2026-10-21
 

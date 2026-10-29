@@ -716,4 +716,8 @@ Concorrência sem cancelamento + checagem de "ainda é a ponta da master" impede
 que uma execução antiga substitua uma versão mais nova; tag publicada nunca é
 sobrescrita; rollback é um workflow manual que reaponta para uma tag já
 publicada. O token do Coolify existe só na Environment `producao`.
+O deploy automático nasce desligado: só roda com `AUTO_DEPLOY_ENABLED=true` na
+Environment `producao` (lida no job `imagem`, onde as variáveis da Environment
+existem); sem ela o push na `master` só publica a imagem. Verificar, rollback e
+deploy manual não dependem da chave.
 

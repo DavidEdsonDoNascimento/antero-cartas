@@ -82,8 +82,8 @@ lista revisada.
 Pelo GitHub Actions (fora da VPS), `.github/workflows/docker-image.yml`:
 
 - **Produção, automático:** todo push na `master` (merge de PR) valida, constrói
-  a imagem de **produção**, publica no GHCR e implanta no Coolify. Detalhes,
-  concorrência e rollback em §13.
+  a imagem de **produção** e publica no GHCR. O deploy no Coolify só acontece
+  com `AUTO_DEPLOY_ENABLED=true` na Environment `producao` (§13).
 - **Manual (contingência/homologação):** Actions → **Imagem Docker** → Run
   workflow permite escolher o ambiente. A publicação no GHCR é opt-in: só
   ocorre se a variável `GHCR_PUBLISH` da Environment for `true` **e** `publicar`
@@ -349,6 +349,14 @@ push master ─► verificar ─► imagem ─► deploy
 
 - Se `verificar` ou o build falharem, o job `deploy` não roda: o Coolify não é tocado.
 - Pull request nunca dispara o workflow.
+- **Chave de segurança `AUTO_DEPLOY_ENABLED`:** em push na `master`, teste, build e
+  publicação no GHCR acontecem sempre; o job `deploy` (PATCH + POST) só roda se
+  a variável for exatamente `true`. Ausente, vazia ou qualquer outro valor: o
+  Coolify **não** é modificado e o resumo da execução diz que o deploy
+  automático está desabilitado. A variável é lida no job `imagem`, porque
+  variáveis de Environment só existem em jobs que declaram `environment:` (não
+  no `if:` do job `deploy`). Não afeta *Coolify produção → verificar/rollback*
+  nem o disparo manual com `implantar`.
 - O deploy altera **só** `docker_registry_image_tag` da aplicação existente. Não
   cria aplicação, não toca em banco, volumes, domínio nem variáveis de runtime.
 - Resultado e SHA publicado ficam no resumo da execução (junto com a **tag
@@ -362,6 +370,7 @@ push master ─► verificar ─► imagem ─► deploy
 | `COOLIFY_TOKEN` | secret | token da API (Read + Write + Deploy); só o job `deploy` o lê |
 | `COOLIFY_URL` | variable | `https://…` do painel (sem barra final; `/api/v1` é aceito e removido) |
 | `COOLIFY_APP_UUID` | variable | UUID da aplicação de produção já existente |
+| `AUTO_DEPLOY_ENABLED` | variable | `true` liga o deploy a cada merge na `master`; ausente/`false` = só publica a imagem |
 | variáveis de build (§3.1) | variables | embutidas na imagem |
 
 **Concorrência e ordem**
@@ -376,11 +385,22 @@ push master ─► verificar ─► imagem ─► deploy
 4. Antes do PATCH, confere que a aplicação usa a imagem `ghcr.io/<owner>/antero-cartas`
    e é do tipo Docker Image. Depois do PATCH, lê a tag de volta.
 
+**Ativar o primeiro deploy** (com `AUTO_DEPLOY_ENABLED` ausente)
+
+1. Fazer o merge: a imagem `producao-<sha>` é publicada, o Coolify não é tocado.
+2. *Coolify produção → Run workflow → `verificar`* (só leitura).
+3. *Imagem Docker → Run workflow* (branch `master`): `ambiente=producao`,
+   `publicar` e `implantar` marcados (exige `GHCR_PUBLISH=true`). Se a tag desse
+   commit já existe no GHCR, ela é reaproveitada, sem rebuild. Acompanhar o
+   deploy e o `/api/health`.
+4. Só depois, criar `AUTO_DEPLOY_ENABLED=true` na Environment `producao`.
+   Desligar de novo: apagar a variável ou pôr `false`.
+
 **Manual**
 
 - *Imagem Docker → Run workflow* com `ambiente=producao`, `publicar` e
-  `implantar`: redeploy de emergência (só a partir da `master`; exige
-  `GHCR_PUBLISH=true`).
+  `implantar`: deploy manual / emergência (só a partir da `master`; exige
+  `GHCR_PUBLISH=true`; independe de `AUTO_DEPLOY_ENABLED`).
 - *Coolify produção → Run workflow*:
   - `verificar`: só leitura. Confere token, URL, UUID e imagem. Use no primeiro
     setup e ao trocar o token.

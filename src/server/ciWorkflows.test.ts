@@ -81,13 +81,13 @@ describe("docker-image.yml — encadeamento (falhou antes, não implanta)", () =
 describe("docker-image.yml — publicação", () => {
   const meta = () => stepNamed(image.jobs.imagem, /decisões de publicar/);
 
-  it("push publica e implanta sem depender de GHCR_PUBLISH; manual continua sob controle", () => {
+  it("push publica sem depender de GHCR_PUBLISH e só implanta com AUTO_DEPLOY_ENABLED=true; manual continua sob controle", () => {
     const script: string = meta().run;
-    // push → publish=true e deploy=true, antes de qualquer menção à variável
     const pushBranch = script.slice(script.indexOf('if [ "$GITHUB_EVENT_NAME" = "push" ]'), script.indexOf("elif"));
     expect(pushBranch).toContain("publish=true");
-    expect(pushBranch).toContain("deploy=true");
     expect(pushBranch).not.toContain("GHCR_PUBLISH");
+    expect(pushBranch).toContain('if [ "$AUTO_DEPLOY_ENABLED" = "true" ]; then');
+    expect(pushBranch.match(/deploy=true/g)).toHaveLength(1); // só dentro do if acima
     // manual → opção marcada E variável
     expect(script).toMatch(/elif \[ "\$PUBLICAR_INPUT" = "true" \] && \[ "\$GHCR_PUBLISH" = "true" \]/);
   });
@@ -136,6 +136,32 @@ describe("docker-image.yml — publicação", () => {
   it("no push, a Environment e o ambiente são sempre producao", () => {
     expect(image.jobs.imagem.environment).toContain("github.event_name == 'push' && 'producao'");
     expect(image.env.AMBIENTE).toContain("github.event_name == 'push' && 'producao'");
+  });
+});
+
+describe("docker-image.yml — AUTO_DEPLOY_ENABLED (Environment producao)", () => {
+  it("é lida no job `imagem` (que declara a Environment), onde as variáveis dela existem", () => {
+    const meta = stepNamed(image.jobs.imagem, /decisões de publicar/);
+    expect(meta.env.AUTO_DEPLOY_ENABLED).toBe("${{ vars.AUTO_DEPLOY_ENABLED }}");
+    expect(image.jobs.imagem.environment).toBeDefined();
+  });
+
+  it("o `if` do job deploy não depende dela: variáveis de Environment não existem no `if` do job", () => {
+    expect(image.jobs.deploy.if).not.toContain("AUTO_DEPLOY_ENABLED");
+    expect(image.jobs.deploy.if).toContain("needs.imagem.outputs.deploy == 'true'");
+    expect(stepNamed(image.jobs.imagem, /Resumo/).env.AUTO_DEPLOY_DISABLED).toBe(
+      "${{ steps.meta.outputs.auto_deploy_disabled }}",
+    );
+  });
+
+  it("o resumo avisa que o deploy automático está desabilitado", () => {
+    const resumo = stepNamed(image.jobs.imagem, /Resumo/).run;
+    expect(resumo).toContain("Deploy automático desabilitado");
+    expect(resumo).toContain("não** foi modificado");
+  });
+
+  it("a verificação/rollback manuais do Coolify não dependem dela", () => {
+    expect(opsRaw).not.toContain("AUTO_DEPLOY_ENABLED");
   });
 });
 
@@ -264,6 +290,7 @@ describe("decisão de publicar/implantar — o script do workflow executado de v
   }
 
   const push = { GITHUB_EVENT_NAME: "push", AMBIENTE: "producao" };
+  const publishedNotDeployed = { publish: "true", deploy: "false", auto_deploy_disabled: "true" };
   const manual = (extra: Record<string, string>) => ({
     GITHUB_EVENT_NAME: "workflow_dispatch",
     AMBIENTE: "producao",
@@ -272,16 +299,47 @@ describe("decisão de publicar/implantar — o script do workflow executado de v
     ...extra,
   });
 
-  it("push na master: publica e implanta mesmo com GHCR_PUBLISH ausente ou false", () => {
+  it("push na master com AUTO_DEPLOY_ENABLED=true: publica e implanta, com GHCR_PUBLISH ausente, false ou true", () => {
     for (const GHCR_PUBLISH of ["", "false", "true"]) {
-      const r = decide({ ...push, GHCR_PUBLISH });
+      const r = decide({ ...push, GHCR_PUBLISH, AUTO_DEPLOY_ENABLED: "true" });
       expect(r.code).toBe(0);
       expect(r.outputs).toMatchObject({
         image: "ghcr.io/donodorepo/antero-cartas",
         tag: `producao-${SHA}`,
         publish: "true",
         deploy: "true",
+        auto_deploy_disabled: "false",
       });
+    }
+  });
+
+  it.each([
+    ["ausente", {}],
+    ["vazia", { AUTO_DEPLOY_ENABLED: "" }],
+    ["false", { AUTO_DEPLOY_ENABLED: "false" }],
+    ["valor parecido (TRUE, 1, yes)", { AUTO_DEPLOY_ENABLED: "TRUE" }],
+    ["1", { AUTO_DEPLOY_ENABLED: "1" }],
+    ["yes", { AUTO_DEPLOY_ENABLED: "yes" }],
+    ["com espaço", { AUTO_DEPLOY_ENABLED: "true " }],
+  ])("push na master com AUTO_DEPLOY_ENABLED %s: publica no GHCR, NÃO implanta e avisa", (_name, extra) => {
+    const r = decide({ ...push, GHCR_PUBLISH: "", ...extra });
+    expect(r.code).toBe(0);
+    expect(r.outputs).toMatchObject({ tag: `producao-${SHA}`, ...publishedNotDeployed });
+    expect(r.stdout).toContain("::notice::Deploy automático desabilitado");
+  });
+
+  it("AUTO_DEPLOY_ENABLED não afeta execuções manuais", () => {
+    // Sem implantar marcado, nunca implanta — mesmo com a variável true.
+    expect(decide(manual({ PUBLICAR_INPUT: "true", GHCR_PUBLISH: "true", AUTO_DEPLOY_ENABLED: "true" })).outputs).toMatchObject({
+      publish: "true",
+      deploy: "false",
+      auto_deploy_disabled: "false",
+    });
+    // Com implantar marcado, implanta mesmo com a variável ausente ou false (ativação da 1ª versão).
+    for (const AUTO_DEPLOY_ENABLED of [undefined, "false"]) {
+      const env = manual({ PUBLICAR_INPUT: "true", IMPLANTAR_INPUT: "true", GHCR_PUBLISH: "true" });
+      const r = decide(AUTO_DEPLOY_ENABLED === undefined ? env : { ...env, AUTO_DEPLOY_ENABLED });
+      expect(r.outputs).toMatchObject({ publish: "true", deploy: "true", auto_deploy_disabled: "false" });
     }
   });
 

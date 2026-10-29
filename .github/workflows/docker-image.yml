@@ -2,7 +2,10 @@
 #
 # Gatilhos
 # - push na `master` (merge de PR): valida, constrói a imagem de PRODUÇÃO fora
-#   da VPS, publica no GHCR e implanta no Coolify. Não depende de GHCR_PUBLISH.
+#   da VPS e publica no GHCR (não depende de GHCR_PUBLISH). Só implanta no
+#   Coolify se a variável AUTO_DEPLOY_ENABLED da Environment producao for
+#   exatamente "true"; senão registra no resumo que o deploy automático está
+#   desabilitado e não modifica o Coolify.
 # - workflow_dispatch: contingência/homologação manual. Só publica se a opção
 #   `publicar` estiver marcada E a variável GHCR_PUBLISH da Environment for
 #   "true". Só implanta (`implantar`) em producao, a partir da master e
@@ -119,6 +122,10 @@ jobs:
         id: meta
         env:
           GHCR_PUBLISH: ${{ vars.GHCR_PUBLISH }}
+          # Variável da Environment producao: só existe nos steps de um job que
+          # declara `environment:` (este). No `if:` do job `deploy` ela NÃO está
+          # disponível, por isso a decisão é tomada aqui e passada em `deploy`.
+          AUTO_DEPLOY_ENABLED: ${{ vars.AUTO_DEPLOY_ENABLED }}
           PUBLICAR_INPUT: ${{ inputs.publicar }}
           IMPLANTAR_INPUT: ${{ inputs.implantar }}
         run: |
@@ -127,12 +134,21 @@ jobs:
           echo "image=ghcr.io/${owner}/antero-cartas" >> "$GITHUB_OUTPUT"
           echo "tag=${AMBIENTE}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-          # Push na master publica sempre. Manual: opção marcada E GHCR_PUBLISH=true.
+          # Push na master publica sempre; só implanta com AUTO_DEPLOY_ENABLED=true
+          # (ausente ou qualquer outro valor = Coolify intocado).
+          # Manual: publica com a opção marcada E GHCR_PUBLISH=true; implantar
+          # é decisão explícita do operador e não depende de AUTO_DEPLOY_ENABLED.
           publish=false
           deploy=false
+          auto_deploy_disabled=false
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             publish=true
-            deploy=true
+            if [ "$AUTO_DEPLOY_ENABLED" = "true" ]; then
+              deploy=true
+            else
+              auto_deploy_disabled=true
+              echo "::notice::Deploy automático desabilitado (AUTO_DEPLOY_ENABLED != true na Environment producao). A imagem será publicada; o Coolify não será modificado."
+            fi
           elif [ "$PUBLICAR_INPUT" = "true" ] && [ "$GHCR_PUBLISH" = "true" ]; then
             publish=true
           fi
@@ -145,8 +161,11 @@ jobs:
           if [ "$deploy" = "true" ]; then
             if [ "$AMBIENTE" != "producao" ] || [ "$GITHUB_REF" != "refs/heads/master" ]; then fail "Deploy só de producao a partir da master."; fi
           fi
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+          {
+            echo "publish=$publish"
+            echo "deploy=$deploy"
+            echo "auto_deploy_disabled=$auto_deploy_disabled"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -204,6 +223,7 @@ jobs:
         env:
           PUBLISHED: ${{ steps.meta.outputs.publish }}
           DEPLOY: ${{ steps.meta.outputs.deploy }}
+          AUTO_DEPLOY_DISABLED: ${{ steps.meta.outputs.auto_deploy_disabled }}
           IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
           DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
         run: |
@@ -213,7 +233,14 @@ jobs:
             echo "- Tag: \`$IMAGE\`"
             echo "- Digest: \`$DIGEST\`"
             echo "- Ambiente: \`$AMBIENTE\` — não reutilize em outro ambiente (NEXT_PUBLIC_* e CSP fixados no build)."
-            if [ "$DEPLOY" = "true" ]; then echo "- Próximo passo: job **deploy** (Coolify)."; else echo "- Nenhum deploy será feito nesta execução."; fi
+            if [ "$DEPLOY" = "true" ]; then
+              echo "- Próximo passo: job **deploy** (Coolify)."
+            elif [ "$AUTO_DEPLOY_DISABLED" = "true" ]; then
+              echo "- **Deploy automático desabilitado** (\`AUTO_DEPLOY_ENABLED\` != \`true\` na Environment \`producao\`): o Coolify **não** foi modificado."
+              echo "- Para implantar esta versão: Actions → Imagem Docker → Run workflow (\`ambiente=producao\`, \`publicar\`, \`implantar\`)."
+            else
+              echo "- Nenhum deploy será feito nesta execução."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
