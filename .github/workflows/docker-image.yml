@@ -1,31 +1,39 @@
-# Imagem Docker do Antero Cartas para o Coolify (docs/0011). Nunca faz deploy.
+# Imagem Docker e deploy automático do Antero Cartas no Coolify (docs/0011 §13).
 #
 # Gatilhos
-# - push na branch feat/coolify-hosting-preparation: constrói a imagem de
-#   HOMOLOGAÇÃO. Existe porque um workflow só com `workflow_dispatch` precisa
-#   estar na branch padrão para poder ser acionado — e a branch ainda não foi
-#   mesclada. Nenhum outro push, PR ou merge dispara este workflow.
-# - workflow_dispatch: depois que o arquivo estiver na branch padrão, permite
-#   escolher o ambiente manualmente (inclusive producao).
+# - push na `master` (merge de PR): valida, constrói a imagem de PRODUÇÃO fora
+#   da VPS, publica no GHCR e implanta no Coolify. Não depende de GHCR_PUBLISH.
+# - workflow_dispatch: contingência/homologação manual. Só publica se a opção
+#   `publicar` estiver marcada E a variável GHCR_PUBLISH da Environment for
+#   "true". Só implanta (`implantar`) em producao, a partir da master e
+#   publicando junto.
+# - Pull request NUNCA dispara este workflow (nem constrói, nem implanta).
 #
-# Publicação no GHCR
-# - Só acontece quando a variável do ambiente/repositório GHCR_PUBLISH for
-#   exatamente "true" (Settings → Environments → homologacao → Variables) e, no
-#   disparo manual, a opção `publicar` estiver marcada. Sem isso o job só
-#   valida e constrói (sem push).
-# - Autentica com o GITHUB_TOKEN do próprio run; nenhum segredo a configurar.
-# - Tag imutável: <ambiente>-<sha completo do commit>.
+# Encadeamento: verificar → imagem → deploy. Se lint, typecheck, testes ou o
+# build da imagem falharem, o Coolify não é tocado. O job `deploy` ainda
+# recusa commits que deixaram de ser a ponta da master (re-run de execução
+# antiga) — ver scripts/coolifyDeploy.mjs.
+#
+# Concorrência
+# - Uma execução por ambiente por vez (`concurrency`, sem cancelar a que está
+#   rodando: cancelar no meio do deploy deixaria o Coolify com a tag nova e sem
+#   deploy). Se várias esperam, só a mais recente fica na fila.
+# - O job `deploy` tem um grupo próprio, compartilhado com o workflow
+#   "Coolify produção" (rollback), para que dois deploys nunca se sobreponham.
+#
+# Tag imutável: <ambiente>-<sha completo>. Se a tag já existe no GHCR (re-run),
+# a imagem existente é reaproveitada, nunca sobrescrita.
 #
 # Isolamento
-# - Segredos de runtime (banco, Mercado Pago, Resend...) NÃO existem aqui: o
-#   job só usa variáveis públicas/de build da Environment escolhida. A imagem
-#   de homologação carrega o domínio e as chaves públicas de homologação
-#   embutidos e não deve ser usada em produção; cada ambiente tem a sua.
+# - Segredos de runtime (banco, Mercado Pago, Resend...) NÃO existem aqui: os
+#   jobs de build só usam variáveis públicas/de build da Environment. O único
+#   segredo é COOLIFY_TOKEN, visível apenas ao job `deploy` (Environment
+#   producao). Uma imagem por ambiente: NEXT_PUBLIC_* e CSP são fixados no build.
 name: Imagem Docker
 
 on:
   push:
-    branches: [feat/coolify-hosting-preparation]
+    branches: [master]
   workflow_dispatch:
     inputs:
       ambiente:
@@ -37,16 +45,21 @@ on:
         description: "Publicar no GHCR (também exige GHCR_PUBLISH=true)"
         type: boolean
         default: false
+      implantar:
+        description: "Implantar no Coolify (só producao, a partir da master; exige publicar)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-image-${{ inputs.ambiente || 'homologacao' }}
-  cancel-in-progress: true
+  group: docker-image-${{ github.event_name == 'push' && 'producao' || inputs.ambiente }}
+  # Só builds manuais de homologação (sem deploy) podem ser cancelados.
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.ambiente == 'homologacao' }}
 
 env:
-  AMBIENTE: ${{ inputs.ambiente || 'homologacao' }}
+  AMBIENTE: ${{ github.event_name == 'push' && 'producao' || inputs.ambiente }}
 
 jobs:
   verificar:
@@ -69,10 +82,16 @@ jobs:
     needs: verificar
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: ${{ inputs.ambiente || 'homologacao' }}
+    environment: ${{ github.event_name == 'push' && 'producao' || inputs.ambiente }}
     permissions:
       contents: read
       packages: write # só usado quando a publicação está habilitada
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish: ${{ steps.meta.outputs.publish }}
+      deploy: ${{ steps.meta.outputs.deploy }}
+      digest: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,20 +115,38 @@ jobs:
             [ "$PAYMENT_MODE" = "real" ] || fail "Produção exige PAYMENT_MODE=real."
           fi
 
-      - name: Nome, tag imutável e decisão de publicar
+      - name: Nome, tag imutável e decisões de publicar e implantar
         id: meta
         env:
           GHCR_PUBLISH: ${{ vars.GHCR_PUBLISH }}
           PUBLICAR_INPUT: ${{ inputs.publicar }}
+          IMPLANTAR_INPUT: ${{ inputs.implantar }}
         run: |
+          fail() { echo "::error::$1"; exit 1; }
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "image=ghcr.io/${owner}/antero-cartas" >> "$GITHUB_OUTPUT"
           echo "tag=${AMBIENTE}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+          # Push na master publica sempre. Manual: opção marcada E GHCR_PUBLISH=true.
           publish=false
-          if [ "$GHCR_PUBLISH" = "true" ]; then
-            if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "$PUBLICAR_INPUT" = "true" ]; then publish=true; fi
+          deploy=false
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            publish=true
+            deploy=true
+          elif [ "$PUBLICAR_INPUT" = "true" ] && [ "$GHCR_PUBLISH" = "true" ]; then
+            publish=true
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$IMPLANTAR_INPUT" = "true" ]; then
+            [ "$AMBIENTE" = "producao" ] || fail "Só é possível implantar o ambiente producao."
+            [ "$GITHUB_REF" = "refs/heads/master" ] || fail "Deploy manual só a partir da master (ref atual: $GITHUB_REF)."
+            [ "$publish" = "true" ] || fail "Implantar exige publicar marcado e GHCR_PUBLISH=true: o Coolify só pode apontar para uma imagem publicada."
+            deploy=true
+          fi
+          if [ "$deploy" = "true" ]; then
+            if [ "$AMBIENTE" != "producao" ] || [ "$GITHUB_REF" != "refs/heads/master" ]; then fail "Deploy só de producao a partir da master."; fi
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -121,8 +158,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build (publica só se autorizado)
+      - name: Tag já publicada? (nunca sobrescrever)
+        id: existing
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+        run: |
+          if digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{.Manifest.Digest}}' 2>/dev/null) && [ -n "$digest" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+            echo "::notice::A tag $IMAGE já existe no GHCR (re-run). Reaproveitando a imagem publicada, sem reconstruir."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build (publica só se autorizado e se a tag for nova)
         id: build
+        if: steps.existing.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -151,14 +203,48 @@ jobs:
       - name: Resumo
         env:
           PUBLISHED: ${{ steps.meta.outputs.publish }}
+          DEPLOY: ${{ steps.meta.outputs.deploy }}
           IMAGE: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
         run: |
           {
-            if [ "$PUBLISHED" = "true" ]; then echo "### Imagem publicada"; else echo "### Imagem construída (NÃO publicada — GHCR_PUBLISH != true)"; fi
+            if [ "$PUBLISHED" = "true" ]; then echo "### Imagem publicada"; else echo "### Imagem construída (NÃO publicada — marque publicar e GHCR_PUBLISH=true)"; fi
             echo ""
             echo "- Tag: \`$IMAGE\`"
             echo "- Digest: \`$DIGEST\`"
             echo "- Ambiente: \`$AMBIENTE\` — não reutilize em outro ambiente (NEXT_PUBLIC_* e CSP fixados no build)."
-            echo "- Nenhum deploy foi feito; no Coolify referencie o digest."
+            if [ "$DEPLOY" = "true" ]; then echo "- Próximo passo: job **deploy** (Coolify)."; else echo "- Nenhum deploy será feito nesta execução."; fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: imagem
+    if: success() && needs.imagem.outputs.deploy == 'true' && needs.imagem.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: producao
+      url: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+    # Mesmo grupo do workflow de rollback: nunca dois deploys ao mesmo tempo, e
+    # nunca cancelar um que já mexeu na tag do Coolify.
+    concurrency:
+      group: coolify-deploy-producao
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Atualizar a tag e iniciar o deploy no Coolify
+        env:
+          MODE: deploy
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_APP_UUID: ${{ vars.COOLIFY_APP_UUID }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          IMAGE_NAME: ${{ needs.imagem.outputs.image }}
+          IMAGE_TAG: ${{ needs.imagem.outputs.tag }}
+          EXPECTED_SHA: ${{ github.sha }}
+          SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/coolifyDeploy.mjs

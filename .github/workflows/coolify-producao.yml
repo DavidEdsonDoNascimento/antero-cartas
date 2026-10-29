@@ -1,0 +1,91 @@
+# Operações manuais de produção no Coolify (docs/0011 §13): verificar e rollback.
+#
+# - verificar: só LEITURA. Confere COOLIFY_URL/COOLIFY_APP_UUID/COOLIFY_TOKEN e
+#   que a aplicação usa a imagem do GHCR do projeto. Não altera nada. Use no
+#   primeiro setup e depois de trocar o token.
+# - rollback: aponta o Coolify para uma tag `producao-<sha completo>` JÁ
+#   publicada no GHCR e reimplanta. Não constrói nada, não roda testes e não
+#   desfaz migrations (docs/0011 §6 e §11): confira o schema antes.
+#
+# Só a partir da master. Compartilha o grupo de concorrência do job `deploy`
+# de "Imagem Docker": nunca há dois deploys ao mesmo tempo.
+name: Coolify produção
+
+on:
+  workflow_dispatch:
+    inputs:
+      acao:
+        description: "verificar = só leitura · rollback = reimplantar uma tag anterior"
+        type: choice
+        options: [verificar, rollback]
+        default: verificar
+      tag:
+        description: "Só no rollback: producao-<sha completo> (veja 'Tag anterior' no resumo do deploy)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  coolify:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: producao
+      url: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+    concurrency:
+      group: coolify-deploy-producao
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read # conferir que a tag do rollback existe no GHCR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Imagem e tag
+        id: alvo
+        env:
+          ACAO: ${{ inputs.acao }}
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "image=ghcr.io/${owner}/antero-cartas" >> "$GITHUB_OUTPUT"
+          if [ "$ACAO" = "rollback" ]; then
+            tag="$TAG_INPUT"
+            [[ "$tag" =~ ^producao-[0-9a-f]{40}$ ]] || fail "Informe a tag no formato producao-<sha completo de 40 caracteres>."
+          else
+            # Verificação: a tag só é conferida em formato; nada é gravado.
+            tag="producao-${GITHUB_SHA}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Login no GHCR
+        if: inputs.acao == 'rollback'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: A tag do rollback existe no GHCR?
+        if: inputs.acao == 'rollback'
+        env:
+          IMAGE: ${{ steps.alvo.outputs.image }}:${{ steps.alvo.outputs.tag }}
+        run: docker manifest inspect "$IMAGE" > /dev/null || { echo "::error::A imagem $IMAGE não existe no GHCR; nada foi alterado."; exit 1; }
+
+      - name: Coolify
+        env:
+          MODE: ${{ inputs.acao == 'rollback' && 'rollback' || 'verify' }}
+          COOLIFY_URL: ${{ vars.COOLIFY_URL }}
+          COOLIFY_APP_UUID: ${{ vars.COOLIFY_APP_UUID }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          IMAGE_NAME: ${{ steps.alvo.outputs.image }}
+          IMAGE_TAG: ${{ steps.alvo.outputs.tag }}
+          SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+        run: node scripts/coolifyDeploy.mjs

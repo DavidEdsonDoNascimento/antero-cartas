@@ -1,5 +1,19 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Infra] — Deploy automático da master no Coolify (D73) — 2026-10-29
+
+- `docker-image.yml`: push na `master` → verificar → imagem (GHCR,
+  `producao-<sha40>`) → deploy no Coolify. Pull request não dispara nada.
+  Manual continua sob `GHCR_PUBLISH`/`publicar`; `implantar` só em producao,
+  na master.
+- `scripts/coolifyDeploy.mjs`: confere a aplicação, PATCH da tag, `POST /deploy`,
+  espera o deployment, registra SHA e tag anterior; ignora execuções que não
+  são mais a ponta da `master`.
+- `coolify-producao.yml`: verificar (leitura) e rollback para tag anterior.
+- Testes: `src/server/coolifyDeploy.test.ts` (API simulada) e
+  `src/server/ciWorkflows.test.ts` (estrutura dos YAML e lógica de decisão).
+- Docs: `0011` §13. Sem mudança em banco, volumes, domínio ou variáveis de runtime.
+
 ## [Migração] — Preparação para Docker/Coolify (branch, sem deploy) — 2026-10-21
 
 Fase 2 da migração Vercel + Supabase → Coolify (docs/0011, D67–D72). A
