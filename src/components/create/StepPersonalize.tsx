@@ -71,6 +71,9 @@ function apiErrorMessage(err: unknown, fallback: string): string {
 }
 
 function uploadErrorMessage(failure: UploadFailure, err: unknown): string {
+  if (failure.reselect) {
+    return "Não foi possível ler esta foto. Se ela está no Google Fotos, salve-a no aparelho ou escolha-a pela Galeria e toque em “Escolher de novo”. As outras fotos não foram afetadas.";
+  }
   switch (failure.stage) {
     case "validation":
       return (err as Error).message;
@@ -114,6 +117,8 @@ interface PendingPhoto {
   status: PendingStatus;
   /** Em "Falhou": vale oferecer "Tentar de novo"? (recusas definitivas, não) */
   retryable: boolean;
+  /** Em "Falhou": o arquivo escolhido não é mais legível — só escolher de novo resolve. */
+  reselect?: boolean;
   previewBroken?: boolean;
 }
 
@@ -138,6 +143,10 @@ function PhotosField({
   onMediaChanged,
 }: Pick<Props, "cart" | "session" | "onCartUpdated" | "onMediaChanged">) {
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Seletor de uma foto só, aberto por "Escolher de novo". */
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  /** Foto com falha que o seletor de substituição vai trocar (só vale com ele aberto). */
+  const replaceTargetRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Remoção de uma foto já enviada em andamento. */
   const [removing, setRemoving] = useState(false);
@@ -177,9 +186,15 @@ function PhotosField({
     setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }
 
-  function setJobStatus(id: string, job: UploadJob, status: PendingStatus, retryable = true) {
+  function setJobStatus(
+    id: string,
+    job: UploadJob,
+    status: PendingStatus,
+    retryable = true,
+    reselect = false,
+  ) {
     job.status = status;
-    patchPending(id, { status, retryable });
+    patchPending(id, { status, retryable, reselect });
   }
 
   /** Tira a foto pendente da tela e cancela o que ainda não começou. */
@@ -200,7 +215,7 @@ function PhotosField({
     queueRef.current = queueRef.current.then(() => runUpload(id, attempt)).catch(() => {});
   }
 
-  function handleFiles(files: FileList | null) {
+  function handleFiles(files: ArrayLike<File> | null) {
     if (!files) return;
     setError(null);
 
@@ -215,17 +230,52 @@ function PhotosField({
     if (chosen.length === 0) return;
 
     // Prévia otimista imediata — aparece antes de ler, comprimir ou enviar.
-    const entries: PendingPhoto[] = chosen.map((file) => {
-      const id = crypto.randomUUID();
-      const reader = createPhotoReader(file);
-      // Lê já, enquanto o Android ainda garante o acesso ao arquivo recém-
-      // escolhido — não quando chegar a vez desta foto na fila.
-      reader.prefetch();
-      jobsRef.current.set(id, { file, reader, prepared: null, attempt: 1, status: "queued" });
-      return { id, previewUrl: URL.createObjectURL(file), status: "queued", retryable: true };
-    });
+    const entries = chosen.map(createPending);
     setPending((prev) => [...prev, ...entries]);
     for (const entry of entries) enqueue(entry.id, 1);
+  }
+
+  /** Registra o job de uma foto recém-escolhida e devolve o que a tela mostra dela. */
+  function createPending(file: File): PendingPhoto {
+    const id = crypto.randomUUID();
+    const reader = createPhotoReader(file);
+    // Lê já, enquanto o Android ainda garante o acesso ao arquivo recém-
+    // escolhido — não quando chegar a vez desta foto na fila.
+    reader.prefetch();
+    jobsRef.current.set(id, { file, reader, prepared: null, attempt: 1, status: "queued" });
+    return { id, previewUrl: URL.createObjectURL(file), status: "queued", retryable: true };
+  }
+
+  /** "Escolher de novo": só abre o seletor. A foto com falha fica na tela até haver uma nova. */
+  function reselectPending(id: string) {
+    replaceTargetRef.current = id;
+    replaceInputRef.current?.click();
+  }
+
+  /**
+   * Troca a foto com falha pela recém-escolhida, na mesma posição da lista.
+   * Seleção cancelada nunca chega aqui (o navegador não dispara `change`). Se a
+   * foto com falha já saiu da tela, a escolhida entra como uma seleção normal.
+   */
+  function handleReplacement(files: FileList | null) {
+    const targetId = replaceTargetRef.current;
+    replaceTargetRef.current = null;
+    const file = files?.[0];
+    if (replaceInputRef.current) replaceInputRef.current.value = "";
+    if (!file) return;
+
+    const old = targetId ? jobsRef.current.get(targetId) : undefined;
+    if (!targetId || !old || old.status !== "error") {
+      handleFiles([file]);
+      return;
+    }
+    if (!pendingRef.current.some((p) => p.id !== targetId && p.status === "error")) setError(null);
+    const oldPreview = pendingRef.current.find((p) => p.id === targetId)?.previewUrl;
+    if (oldPreview) URL.revokeObjectURL(oldPreview);
+    jobsRef.current.delete(targetId);
+    const entry = createPending(file);
+    setPending((prev) => prev.map((p) => (p.id === targetId ? entry : p)));
+    enqueue(entry.id, 1);
   }
 
   /** Lê, prepara e envia uma foto. Não lança: falhas viram "Falhou" na tela. */
@@ -270,7 +320,7 @@ function PhotosField({
       const failure = classifyUploadError(err);
       reportUploadFailure(failure, ctx);
       // A foto continua na tela, com "Tentar de novo" e "Remover".
-      setJobStatus(id, job, "error", failure.retryable);
+      setJobStatus(id, job, "error", failure.retryable, failure.reselect);
       setError(uploadErrorMessage(failure, err));
     }
   }
@@ -515,6 +565,15 @@ function PhotosField({
                         Tentar de novo
                       </button>
                     )}
+                    {p.reselect && (
+                      <button
+                        type="button"
+                        onClick={() => reselectPending(p.id)}
+                        className="w-full rounded-md border border-rosa/40 bg-white px-1 py-1 text-[11px] font-medium text-vinho transition hover:border-vinho/50 hover:bg-rosa-soft/30"
+                      >
+                        Escolher de novo
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => discardPending(p.id)}
@@ -547,6 +606,13 @@ function PhotosField({
           multiple
           hidden
           onChange={(e) => handleFiles(e.target.files)}
+        />
+        <input
+          ref={replaceInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          hidden
+          onChange={(e) => handleReplacement(e.target.files)}
         />
         {cart.media.length > 0 && (
           <p className="text-xs text-grafite/45">

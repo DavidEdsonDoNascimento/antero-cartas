@@ -39,6 +39,11 @@ export interface UploadFailure {
   code?: string;
   /** Vale oferecer "Tentar de novo"? */
   retryable: boolean;
+  /**
+   * O `File` do seletor não pode mais ser lido (Android: `NotReadableError`).
+   * Reler o mesmo arquivo falha sempre; só escolher a foto de novo resolve.
+   */
+  reselect?: boolean;
 }
 
 export function classifyUploadError(err: unknown): UploadFailure {
@@ -46,6 +51,9 @@ export function classifyUploadError(err: unknown): UploadFailure {
     return { stage: "validation", errorName: err.name, retryable: false };
   }
   if (err instanceof PhotoProcessingError) {
+    if (err.stage === "read" && !err.timedOut && err.causeName === "NotReadableError") {
+      return { stage: "read", errorName: err.causeName, retryable: false, reselect: true };
+    }
     return err.timedOut
       ? { stage: "timeout", detail: err.stage, errorName: err.name, retryable: true }
       : { stage: err.stage, errorName: err.causeName ?? err.name, retryable: true };

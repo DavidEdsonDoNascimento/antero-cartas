@@ -195,10 +195,10 @@ async function click(button: HTMLButtonElement | undefined) {
 }
 
 describe("mesmo arquivo: falha na 1ª tentativa, funciona na 2ª", () => {
-  it("falha de leitura do Android → foto continua visível e 'Tentar de novo' envia sem nova seleção", async () => {
+  it("falha temporária de leitura (0 bytes) → foto continua visível e 'Tentar de novo' envia sem nova seleção", async () => {
     const file = jpeg();
     vi.spyOn(file, "arrayBuffer")
-      .mockRejectedValueOnce(new DOMException("x", "NotReadableError"))
+      .mockResolvedValueOnce(new ArrayBuffer(0))
       .mockResolvedValueOnce(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer);
     await selectPhotos(file);
 
@@ -207,6 +207,8 @@ describe("mesmo arquivo: falha na 1ª tentativa, funciona na 2ª", () => {
     expect(container.textContent).toMatch(/Não foi possível ler esta foto/);
     expect(uploadPhoto).not.toHaveBeenCalled();
     expect(pickerButton().disabled).toBe(false);
+    // Falha recuperável: o retry normal basta, sem pedir para escolher de novo.
+    expect(buttonByText("Escolher de novo")).toBeUndefined();
 
     await click(buttonByText("Tentar de novo"));
 
@@ -505,5 +507,147 @@ describe("validação", () => {
     expect(buttonByText("Tentar de novo")).toBeUndefined();
     expect(buttonByText("Remover")).toBeDefined();
     expect(uploadPhoto).not.toHaveBeenCalled();
+  });
+});
+
+/** Foto que o Android não entrega mais: toda leitura do mesmo `File` falha. */
+function unreadable(name = "nuvem.jpg"): File {
+  const file = jpeg(name);
+  vi.spyOn(file, "arrayBuffer").mockRejectedValue(new DOMException("x", "NotReadableError"));
+  return file;
+}
+
+function replaceInput(): HTMLInputElement {
+  return container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+}
+
+/** O usuário escolheu uma foto no seletor aberto por "Escolher de novo". */
+async function selectReplacement(...files: File[]) {
+  const input = replaceInput();
+  Object.defineProperty(input, "files", { value: files, configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await settle();
+}
+
+/** `click()` de um <input type=file> não abre nada no jsdom: registra quem foi acionado. */
+function trackPickerOpens(): HTMLInputElement[] {
+  const opened: HTMLInputElement[] = [];
+  vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(function (this: HTMLInputElement) {
+    opened.push(this);
+  });
+  return opened;
+}
+
+describe("NotReadableError: o arquivo não pode ser relido", () => {
+  it("sem 'Tentar de novo'; orienta Google Fotos → aparelho/Galeria e oferece 'Escolher de novo'", async () => {
+    const file = unreadable();
+    await selectPhotos(file);
+
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(buttonByText("Tentar de novo")).toBeUndefined();
+    expect(buttonByText("Escolher de novo")).toBeDefined();
+    expect(buttonByText("Remover")).toBeDefined();
+    expect(container.textContent).toMatch(/Google Fotos/);
+    expect(container.textContent).toMatch(/salve-a no aparelho ou escolha-a pela Galeria/);
+    expect(container.textContent).toMatch(/As outras fotos não foram afetadas/);
+    expect(uploadPhoto).not.toHaveBeenCalled();
+    expect(pickerButton().disabled).toBe(false);
+  });
+
+  it("'Escolher de novo' só abre o seletor de substituição; a foto com falha continua visível", async () => {
+    await selectPhotos(unreadable());
+    const opened = trackPickerOpens();
+
+    await click(buttonByText("Escolher de novo"));
+
+    expect(opened).toEqual([replaceInput()]);
+    expect(replaceInput().multiple).toBe(false);
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(container.querySelector('img[src="blob:preview"]')).not.toBeNull();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    expect(buttonByText("Escolher de novo")).toBeDefined();
+    expect(buttonByText("Remover")).toBeDefined();
+  });
+
+  it("seleção cancelada (sem 'change' ou sem arquivo): nada é removido nem alterado", async () => {
+    await selectPhotos(unreadable());
+    trackPickerOpens();
+    await click(buttonByText("Escolher de novo"));
+
+    await selectReplacement(); // seletor fechado sem escolher nada
+
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(container.querySelector('img[src="blob:preview"]')).not.toBeNull();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    expect(buttonByText("Escolher de novo")).toBeDefined();
+    expect(uploadPhoto).not.toHaveBeenCalled();
+  });
+
+  it("escolher outra foto substitui SÓ a com falha: mesma posição, demais intactas, novo uploadId", async () => {
+    await selectPhotos(unreadable("a.jpg"), unreadable("b.jpg"));
+    expect(pendingStatuses()).toEqual(["error", "error"]);
+    trackPickerOpens();
+
+    // Troca a primeira; a segunda continua com a falha dela.
+    const up = deferred<{ cart: Cart }>();
+    uploadPhoto.mockImplementationOnce(() => up.promise);
+    await click(buttonByText("Escolher de novo")); // a primeira da lista
+    await selectReplacement(jpeg("nova.jpg"));
+
+    expect(pendingStatuses()).toEqual(["uploading", "error"]); // posição preservada
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1); // só a prévia da trocada
+    expect(buttonByText("Escolher de novo")).toBeDefined(); // a outra ainda pode ser trocada
+    expect(uploadPhoto).toHaveBeenCalledTimes(1);
+    const uploadId = uploadPhoto.mock.calls[0][4];
+    expect(uploadId).toBe("00000000-0000-4000-8000-000000000003"); // 3º UUID: o das duas falhas é 1 e 2
+
+    up.resolve({ cart: { ...CART, media: [media("m1", uploadId)] } });
+    await settle();
+    expect(onMediaChanged).toHaveBeenCalledTimes(1);
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(pickerButton().textContent).toContain("· 1/"); // contagem: 2 → 1 (uma subiu), sem sobra da trocada
+  });
+
+  it("no limite de fotos: a substituição não conta como foto a mais", async () => {
+    const full = {
+      ...CART,
+      media: Array.from({ length: realImage.MAX_CART_PHOTOS - 1 }, (_, i) => media(`m${i}`, `u${i}`, i)),
+    };
+    act(() => render(full));
+    await selectPhotos(unreadable());
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(pickerButton()).toBeUndefined(); // limite atingido: seletor principal some
+    trackPickerOpens();
+
+    await click(buttonByText("Escolher de novo"));
+    await selectReplacement(jpeg("nova.jpg"));
+
+    expect(uploadPhoto).toHaveBeenCalledTimes(1);
+    expect(onMediaChanged).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toMatch(/no máximo/);
+  });
+
+  it("se a foto com falha foi removida com o seletor aberto, a escolhida entra como seleção normal", async () => {
+    await selectPhotos(unreadable());
+    trackPickerOpens();
+    await click(buttonByText("Escolher de novo"));
+    await click(buttonByText("Remover"));
+    expect(pendingStatuses()).toEqual([]);
+
+    await selectReplacement(jpeg("nova.jpg"));
+
+    expect(uploadPhoto).toHaveBeenCalledTimes(1);
+    expect(onMediaChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("outro erro de leitura (0 bytes) continua com 'Tentar de novo', sem 'Escolher de novo'", async () => {
+    const file = jpeg();
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(0));
+    await selectPhotos(file);
+    expect(pendingStatuses()).toEqual(["error"]);
+    expect(buttonByText("Tentar de novo")).toBeDefined();
+    expect(buttonByText("Escolher de novo")).toBeUndefined();
   });
 });
