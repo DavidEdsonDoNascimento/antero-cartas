@@ -50,7 +50,9 @@ Internet ──HTTPS──► Traefik (proxy do Coolify, Let's Encrypt)
 | `scripts/migrateDeploy.mjs` | migration controlada (espera o banco, recusa Supabase, falha fecha) |
 | `scripts/test-integration-pg17.sh` | suíte completa contra PostgreSQL 17 descartável |
 | `compose.local.yaml` | ambiente local descartável: app + PostgreSQL 17 + volumes |
-| `.github/workflows/docker-image.yml` | build manual fora da VPS (opcional, publica no GHCR só se marcado) |
+| `.github/workflows/docker-image.yml` | testes → build da imagem fora da VPS → publica no GHCR → deploy no Coolify (push na `master`; manual como contingência) — §13 |
+| `.github/workflows/coolify-producao.yml` | manual: verificar o Coolify (só leitura) e rollback para uma tag anterior — §13 |
+| `scripts/coolifyDeploy.mjs` | PATCH da tag + deploy pela API do Coolify, com checagens e espera do resultado — §13 |
 | `src/app/api/health/route.ts` | health check (banco + volume) |
 | `src/server/maintenance.ts` | modo de manutenção |
 | `src/server/storage/mediaUrl.ts` | estratégia de URL das fotos |
@@ -79,21 +81,22 @@ lista revisada.
 
 Pelo GitHub Actions (fora da VPS), `.github/workflows/docker-image.yml`:
 
-- **Enquanto a branch não for mesclada:** um `push` em
-  `feat/coolify-hosting-preparation` constrói a imagem de **homologação**. (Um
-  workflow só com `workflow_dispatch` precisa estar na branch padrão para ser
-  acionado; por isso o gatilho `push`, restrito a esta branch.)
-- **Depois do merge:** Actions → **Imagem Docker** → Run workflow permite
-  escolher o ambiente.
-- **Publicação no GHCR é opt-in:** só ocorre se a variável `GHCR_PUBLISH` da
-  Environment for `true` (e, no disparo manual, `publicar` marcado). Sem isso o
-  job valida e constrói, sem publicar. Sem segredos: usa o `GITHUB_TOKEN`.
-- **Pré-requisito:** criar a Environment `homologacao` com as variáveis de
-  build (§3.1). O job falha cedo se faltarem `APP_ENV`/`NEXT_PUBLIC_SITE_URL`,
-  se `PAYMENT_MODE` divergir de `NEXT_PUBLIC_PAYMENT_MODE`, se homologação usar
-  o domínio de produção ou se produção definir o mock.
-- **Tag:** `ghcr.io/<owner>/antero-cartas:<ambiente>-<sha completo>`; no
-  Coolify, referencie pelo **digest** do resumo do run. Nunca há deploy.
+- **Produção, automático:** todo push na `master` (merge de PR) valida, constrói
+  a imagem de **produção** e publica no GHCR. O deploy no Coolify só acontece
+  com `AUTO_DEPLOY_ENABLED=true` na Environment `producao` (§13).
+- **Manual (contingência/homologação):** Actions → **Imagem Docker** → Run
+  workflow permite escolher o ambiente. A publicação no GHCR é opt-in: só
+  ocorre se a variável `GHCR_PUBLISH` da Environment for `true` **e** `publicar`
+  estiver marcado. Sem isso o job valida e constrói, sem publicar. Esse
+  controle vale só para execuções manuais; o push na `master` publica sempre.
+- **Sem segredos de runtime:** usa o `GITHUB_TOKEN` para o GHCR. O único
+  segredo envolvido é o `COOLIFY_TOKEN`, só no job de deploy (§13).
+- **Pré-requisito:** Environment com as variáveis de build (§3.1). O job falha
+  cedo se faltarem `APP_ENV`/`NEXT_PUBLIC_SITE_URL`, se `PAYMENT_MODE` divergir
+  de `NEXT_PUBLIC_PAYMENT_MODE`, se homologação usar o domínio de produção ou
+  se produção definir o mock.
+- **Tag:** `ghcr.io/<owner>/antero-cartas:<ambiente>-<sha completo>`, nunca
+  sobrescrita (um re-run reaproveita a imagem já publicada).
 
 ### 2.1 Isolamento homologação × produção
 
@@ -330,3 +333,91 @@ integração apontando para um banco real.
 7. Trocar o DNS na Cloudflare e conferir o HTTPS.
 8. Conferir os webhooks reenviados e os pedidos `PENDING` no painel do
    Mercado Pago.
+
+## 13. Deploy automático em produção (Coolify)
+
+**Fluxo após o merge na `master`** (`docker-image.yml`):
+
+```
+push master ─► verificar ─► imagem ─► deploy
+               lint          build fora da VPS     checa ponta da master
+               typecheck     (vars da Environment  GET app (imagem certa?)
+               testes + PG17  producao)            PATCH docker_registry_image_tag
+                             push GHCR             POST /deploy?uuid=…&force=false
+                             producao-<sha40>      espera o deployment + /api/health
+```
+
+- Se `verificar` ou o build falharem, o job `deploy` não roda: o Coolify não é tocado.
+- Pull request nunca dispara o workflow.
+- **Chave de segurança `AUTO_DEPLOY_ENABLED`:** em push na `master`, teste, build e
+  publicação no GHCR acontecem sempre; o job `deploy` (PATCH + POST) só roda se
+  a variável for exatamente `true`. Ausente, vazia ou qualquer outro valor: o
+  Coolify **não** é modificado e o resumo da execução diz que o deploy
+  automático está desabilitado. A variável é lida no job `imagem`, porque
+  variáveis de Environment só existem em jobs que declaram `environment:` (não
+  no `if:` do job `deploy`). Não afeta *Coolify produção → verificar/rollback*
+  nem o disparo manual com `implantar`.
+- O deploy altera **só** `docker_registry_image_tag` da aplicação existente. Não
+  cria aplicação, não toca em banco, volumes, domínio nem variáveis de runtime.
+- Resultado e SHA publicado ficam no resumo da execução (junto com a **tag
+  anterior**, para rollback) e no histórico de deployments da Environment
+  `producao`.
+
+**Configuração (GitHub → Environment `producao`)**
+
+| Item | Tipo | Uso |
+|---|---|---|
+| `COOLIFY_TOKEN` | secret | token da API (Read + Write + Deploy); só o job `deploy` o lê |
+| `COOLIFY_URL` | variable | `https://…` do painel (sem barra final; `/api/v1` é aceito e removido) |
+| `COOLIFY_APP_UUID` | variable | UUID da aplicação de produção já existente |
+| `AUTO_DEPLOY_ENABLED` | variable | `true` liga o deploy a cada merge na `master`; ausente/`false` = só publica a imagem |
+| variáveis de build (§3.1) | variables | embutidas na imagem |
+
+**Concorrência e ordem**
+
+1. `concurrency` do workflow (`docker-image-producao`, sem cancelar): uma
+   execução por vez; se várias esperam, só a mais recente fica na fila.
+2. Grupo próprio `coolify-deploy-producao` no job `deploy` e no workflow de
+   rollback: nunca dois deploys juntos e nunca um cancelado depois de mudar a tag.
+3. Antes de escrever, o script consulta a ponta da `master`; se o commit não é
+   mais a ponta (re-run de execução antiga, fila), o deploy é **ignorado** e o
+   Coolify fica como está. Se não for possível consultar, o deploy é bloqueado.
+4. Antes do PATCH, confere que a aplicação usa a imagem `ghcr.io/<owner>/antero-cartas`
+   e é do tipo Docker Image. Depois do PATCH, lê a tag de volta.
+
+**Ativar o primeiro deploy** (com `AUTO_DEPLOY_ENABLED` ausente)
+
+1. Fazer o merge: a imagem `producao-<sha>` é publicada, o Coolify não é tocado.
+2. *Coolify produção → Run workflow → `verificar`* (só leitura).
+3. *Imagem Docker → Run workflow* (branch `master`): `ambiente=producao`,
+   `publicar` e `implantar` marcados (exige `GHCR_PUBLISH=true`). Se a tag desse
+   commit já existe no GHCR, ela é reaproveitada, sem rebuild. Acompanhar o
+   deploy e o `/api/health`.
+4. Só depois, criar `AUTO_DEPLOY_ENABLED=true` na Environment `producao`.
+   Desligar de novo: apagar a variável ou pôr `false`.
+
+**Manual**
+
+- *Imagem Docker → Run workflow* com `ambiente=producao`, `publicar` e
+  `implantar`: deploy manual / emergência (só a partir da `master`; exige
+  `GHCR_PUBLISH=true`; independe de `AUTO_DEPLOY_ENABLED`).
+- *Coolify produção → Run workflow*:
+  - `verificar`: só leitura. Confere token, URL, UUID e imagem. Use no primeiro
+    setup e ao trocar o token.
+  - `rollback` com `tag=producao-<sha completo>` (a "Tag anterior" do resumo do
+    deploy): confere que a tag existe no GHCR, aponta o Coolify para ela e
+    reimplanta. **Não desfaz migrations** (§6, §11).
+
+**Limites conhecidos**
+
+- Commit mais novo com testes quebrados: o commit anterior pode ter sido
+  ignorado por "não ser mais a ponta"; a produção fica na última versão
+  implantada até uma correção chegar à `master`.
+- Se um rollback e um deploy automático esperarem ao mesmo tempo pelo grupo
+  `coolify-deploy-producao`, o GitHub mantém só um na fila; o cancelado aparece
+  como "cancelled" e basta rodar de novo.
+- `/api/health` confirmar a versão é informativo: com o domínio ainda apontando
+  para a Vercel (antes do cutover) vira aviso, não falha.
+- O PATCH/deploy usam os nomes de campo da API do Coolify; o modo `verificar`
+  e o primeiro deploy acompanhado (checklist do PR) validam isso.
+

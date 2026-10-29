@@ -706,3 +706,18 @@ escrita nova ficar sem a checagem, ou se surgir GET/Server Action não revisado.
 GitHub Actions só manual: valida, constrói e só publica no GHCR se marcado,
 com tag `<ambiente>-<sha>`; nenhum deploy automático. Uma imagem por ambiente,
 porque `NEXT_PUBLIC_*`, CSP e HSTS são fixados no build.
+
+## D73 — Deploy automático da `master` no Coolify, com ordem garantida
+Push na `master` valida, constrói a imagem de produção no GitHub Actions e
+publica `producao-<sha completo>` no GHCR (sem depender de `GHCR_PUBLISH`, que
+segue valendo só para execuções manuais). O job `deploy` altera apenas
+`docker_registry_image_tag` da aplicação existente via API e dispara o deploy.
+Concorrência sem cancelamento + checagem de "ainda é a ponta da master" impedem
+que uma execução antiga substitua uma versão mais nova; tag publicada nunca é
+sobrescrita; rollback é um workflow manual que reaponta para uma tag já
+publicada. O token do Coolify existe só na Environment `producao`.
+O deploy automático nasce desligado: só roda com `AUTO_DEPLOY_ENABLED=true` na
+Environment `producao` (lida no job `imagem`, onde as variáveis da Environment
+existem); sem ela o push na `master` só publica a imagem. Verificar, rollback e
+deploy manual não dependem da chave.
+

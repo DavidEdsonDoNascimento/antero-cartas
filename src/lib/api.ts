@@ -37,6 +37,9 @@ async function request<T>(
   const controller = timeoutMs ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let res: Response;
+  // O prazo cobre também a leitura do corpo: numa rede móvel a resposta pode
+  // parar no meio, e `res.json()` sem prazo ficaria pendurado para sempre.
+  let data: { error?: { code?: string; message?: string } } | null;
   try {
     res = await fetch(path, {
       ...rest,
@@ -46,13 +49,14 @@ async function request<T>(
         ...(token ? { [EDIT_TOKEN_HEADER]: token } : {}),
       },
     });
+    data = await res.json().catch(() => null);
   } catch (err) {
     if ((err as Error)?.name === "AbortError") throw new RequestTimeoutError();
     throw err;
   } finally {
     if (timer) clearTimeout(timer);
   }
-  const data = await res.json().catch(() => null);
+  if (controller?.signal.aborted) throw new RequestTimeoutError();
   if (!res.ok) {
     const code = data?.error?.code ?? "unknown";
     const message = data?.error?.message ?? "Erro inesperado. Tente novamente.";
@@ -115,11 +119,18 @@ export function patchCart(
  */
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+/**
+ * `uploadId` (UUID gerado no cliente, um por foto) torna o envio idempotente:
+ * se a resposta se perder depois de o servidor gravar — conexão móvel que cai,
+ * prazo esgotado — o "Tentar de novo" com o mesmo id devolve a foto já gravada
+ * em vez de criar uma duplicata.
+ */
 export function uploadPhoto(
   cartId: string,
   token: string,
   blob: Blob,
   dims?: { width: number; height: number },
+  uploadId?: string,
 ): Promise<{ cart: Cart }> {
   const form = new FormData();
   // O nome é só informativo: o servidor decide o tipo pelos magic bytes.
@@ -128,6 +139,7 @@ export function uploadPhoto(
     form.append("width", String(dims.width));
     form.append("height", String(dims.height));
   }
+  if (uploadId) form.append("uploadId", uploadId);
   return request(`/api/carts/${cartId}/media`, {
     method: "POST",
     token,

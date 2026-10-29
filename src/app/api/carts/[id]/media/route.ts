@@ -30,6 +30,7 @@ export async function POST(
     }
     const widthField = form.get("width");
     const heightField = form.get("height");
+    const uploadIdField = form.get("uploadId");
 
     const body = Buffer.from(await file.arrayBuffer());
     const cart = await addMedia(id, token, {
@@ -37,6 +38,7 @@ export async function POST(
       declaredType: file.type,
       width: widthField ? Number(widthField) : undefined,
       height: heightField ? Number(heightField) : undefined,
+      uploadId: typeof uploadIdField === "string" && uploadIdField ? uploadIdField : undefined,
     });
     return jsonOk({ cart }, 201);
   } catch (err) {

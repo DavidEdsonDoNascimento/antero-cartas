@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import type { Cart } from "@/lib/types";
+import type { Cart, CartMedia } from "@/lib/types";
 import { saveDraft, clearDraft } from "@/lib/storage";
 import { saveSession, clearSession, type CartSession } from "@/lib/cartSession";
 import { patchCart, uploadPhoto, createDraft } from "@/lib/api";
@@ -125,6 +125,11 @@ export function CreateFlow() {
       setResumeBusy(false);
     }
   }
+
+  /** Fotos confirmadas por um upload: só a lista muda, o resto da carta fica. */
+  const applyServerMedia = useCallback((media: CartMedia[]) => {
+    setCart((prev) => (prev ? { ...prev, media } : prev));
+  }, []);
 
   const update = useCallback((patch: Partial<Cart>) => {
     setSaveStatus("saving");
@@ -259,6 +264,7 @@ export function CreateFlow() {
               update={update}
               session={session}
               onCartUpdated={setCart}
+              onMediaChanged={applyServerMedia}
             />
           )}
           {view === 4 && (

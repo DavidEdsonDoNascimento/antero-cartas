@@ -11,10 +11,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   compressPhoto,
+  createPhotoReader,
   preparePhotoForUpload,
-  validateImageFile,
+  readPhotoFile,
   withTimeout,
   PhotoProcessingError,
+  PhotoRejectedError,
+  READ_TIMEOUT_MS,
 } from "@/lib/image";
 
 const JPEG_HEADER = [0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -85,29 +88,110 @@ describe("withTimeout", () => {
   });
 });
 
-describe("validateImageFile", () => {
-  it("devolve mensagem (não lança nem trava) quando a leitura do arquivo falha", async () => {
+describe("readPhotoFile — cópia em memória", () => {
+  it("devolve um Blob independente do File, com o MIME real", async () => {
     const file = jpegFile();
-    vi.spyOn(file, "slice").mockReturnValue({
-      arrayBuffer: () => Promise.reject(new DOMException("x", "NotReadableError")),
-    } as unknown as Blob);
-    await expect(validateImageFile(file)).resolves.toMatch(/Não foi possível ler/);
+    const blob = await readPhotoFile(file);
+    expect(blob).not.toBe(file);
+    expect(blob.type).toBe("image/jpeg");
+    expect(blob.size).toBe(file.size);
   });
 
-  it("devolve mensagem quando a leitura do arquivo nunca termina", async () => {
+  it("NotReadableError do Android vira falha de leitura (vale tentar de novo)", async () => {
     const file = jpegFile();
-    vi.spyOn(file, "slice").mockReturnValue({ arrayBuffer: () => never() } as unknown as Blob);
-    const result = validateImageFile(file);
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(result).resolves.toMatch(/Não foi possível ler/);
+    vi.spyOn(file, "arrayBuffer").mockRejectedValue(new DOMException("x", "NotReadableError"));
+    await expect(readPhotoFile(file)).rejects.toMatchObject({
+      name: "PhotoProcessingError",
+      stage: "read",
+      timedOut: false,
+      causeName: "NotReadableError",
+    });
   });
 
-  it("mantém as validações existentes", async () => {
-    await expect(validateImageFile(jpegFile())).resolves.toBeNull();
+  it("provedor que entrega 0 bytes (foto ainda baixando) é falha de leitura, não recusa", async () => {
+    const file = jpegFile();
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(0));
+    await expect(readPhotoFile(file)).rejects.toMatchObject({ stage: "read", causeName: "EmptyFile" });
+  });
+
+  it("mantém as recusas definitivas", async () => {
     const svg = new File(["<svg/>"], "x.svg", { type: "image/svg+xml" });
-    await expect(validateImageFile(svg)).resolves.toMatch(/Formato não aceito/);
+    await expect(readPhotoFile(svg)).rejects.toThrow(/Formato não aceito/);
     const fake = new File(["texto"], "x.jpg", { type: "image/jpeg" });
-    await expect(validateImageFile(fake)).resolves.toMatch(/não parece ser uma imagem/);
+    await expect(readPhotoFile(fake)).rejects.toThrow(/não parece ser uma imagem/);
+    const huge = jpegFile();
+    Object.defineProperty(huge, "size", { value: 11 * 1024 * 1024 });
+    await expect(readPhotoFile(huge)).rejects.toBeInstanceOf(PhotoRejectedError);
+  });
+
+  it("type vazio (alguns provedores do Android) com bytes de JPEG é aceito", async () => {
+    const file = new File([new Uint8Array(JPEG_HEADER)], "foto", { type: "" });
+    await expect(readPhotoFile(file)).resolves.toMatchObject({ type: "image/jpeg" });
+  });
+});
+
+describe("createPhotoReader — leitura que sobrevive ao prazo", () => {
+  function deferredFile() {
+    const file = jpegFile();
+    let resolve!: (b: ArrayBuffer) => void;
+    const spy = vi
+      .spyOn(file, "arrayBuffer")
+      .mockImplementation(() => new Promise<ArrayBuffer>((r) => (resolve = r)));
+    return { file, spy, finish: () => resolve(new Uint8Array(JPEG_HEADER).buffer) };
+  }
+
+  it("prazo esgotado → retry reaproveita a MESMA leitura que terminou depois", async () => {
+    const { file, spy, finish } = deferredFile();
+    const reader = createPhotoReader(file);
+    reader.prefetch();
+
+    const first = reader.read();
+    const assertion = expect(first).rejects.toMatchObject({ stage: "read", timedOut: true });
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    await assertion;
+
+    finish(); // a foto terminou de baixar depois do prazo
+    await expect(reader.read()).resolves.toMatchObject({ type: "image/jpeg" });
+    expect(spy).toHaveBeenCalledTimes(1); // não leu o arquivo de novo
+  });
+
+  it("leitura que FALHOU é refeita na próxima tentativa", async () => {
+    const file = jpegFile();
+    const spy = vi
+      .spyOn(file, "arrayBuffer")
+      .mockRejectedValueOnce(new DOMException("x", "NotReadableError"))
+      .mockResolvedValueOnce(new Uint8Array(JPEG_HEADER).buffer);
+    const reader = createPhotoReader(file);
+    await expect(reader.read()).rejects.toMatchObject({ stage: "read" });
+    await expect(reader.read()).resolves.toMatchObject({ type: "image/jpeg" });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("leitura bem-sucedida fica em cache: o arquivo é lido uma vez só", async () => {
+    const file = jpegFile();
+    const spy = vi.spyOn(file, "arrayBuffer");
+    const reader = createPhotoReader(file);
+    reader.prefetch();
+    await reader.read();
+    await reader.read();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("withTimeout — conclusão tardia", () => {
+  it("valor que chega depois do prazo vai para onLate (e não resolve nada)", async () => {
+    let resolve!: (v: { close: () => void }) => void;
+    const late = new Promise<{ close: () => void }>((r) => (resolve = r));
+    const onLate = vi.fn((b: { close: () => void }) => b.close());
+    const p = withTimeout(late, 1000, "decode", onLate);
+    const assertion = expect(p).rejects.toMatchObject({ timedOut: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+    const bitmap = { close: vi.fn() };
+    resolve(bitmap);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onLate).toHaveBeenCalledWith(bitmap);
+    expect(bitmap.close).toHaveBeenCalled();
   });
 });
 
