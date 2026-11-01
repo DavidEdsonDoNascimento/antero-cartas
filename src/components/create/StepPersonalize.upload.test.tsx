@@ -96,7 +96,6 @@ function deferred<T>() {
 
 let container: HTMLDivElement;
 let root: Root;
-const onCartUpdated = vi.fn();
 const onMediaChanged = vi.fn();
 let uuidSeq = 0;
 
@@ -106,7 +105,6 @@ function render(cart: Cart = CART) {
       cart={cart}
       update={vi.fn()}
       session={{ cartId: "cart-1", editToken: "tok" }}
-      onCartUpdated={onCartUpdated}
       onMediaChanged={onMediaChanged}
     />,
   );
@@ -255,7 +253,6 @@ describe("prévia local não é 'enviada'", () => {
     expect(pendingStatuses()).toEqual(["error"]);
     expect(container.textContent).toContain("Falhou");
     expect(onMediaChanged).not.toHaveBeenCalled();
-    expect(onCartUpdated).not.toHaveBeenCalled();
     expect(buttonByText("Tentar de novo")).toBeDefined();
     expect(buttonByText("Remover")).toBeDefined();
   });

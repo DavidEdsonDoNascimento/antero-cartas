@@ -12,10 +12,17 @@
 
 import type { Cart } from "@/lib/types";
 import { loadSession, saveSession, clearSession, type CartSession } from "@/lib/cartSession";
-import { loadDraft, clearDraft, hasMeaningfulContent } from "@/lib/storage";
-import { createDraft, fetchCart, type CartPatch } from "@/lib/api";
+import { loadDraft, clearDraft, hasMeaningfulContent, loadUnsyncedChanges } from "@/lib/storage";
+import { ApiClientError, createDraft, fetchCart, type CartPatch } from "@/lib/api";
 
 const EDITABLE_STATUSES = new Set(["DRAFT", "AWAITING_PAYMENT"]);
+
+/** Prazo para ler o rascunho: sem ele, uma rede travada prende o editor no esqueleto. */
+export const LOAD_TIMEOUT_MS = 20_000;
+
+export function isEditableStatus(status: string): boolean {
+  return EDITABLE_STATUSES.has(status);
+}
 
 /** Campos editáveis persistidos via autosave (fotos usam endpoints próprios). */
 export function buildPatch(cart: Cart): CartPatch {
@@ -37,7 +44,14 @@ export function buildPatch(cart: Cart): CartPatch {
 
 export type CartInitOutcome =
   | { kind: "resume"; cart: Cart; session: CartSession }
-  | { kind: "create"; cart: Cart; session: CartSession; legacyMedia: Cart["media"] };
+  | {
+      kind: "create";
+      cart: Cart;
+      session: CartSession;
+      legacyMedia: Cart["media"];
+      /** A carta nasceu do texto não salvo de uma carta que ficou inacessível. */
+      recovered?: boolean;
+    };
 
 /**
  * Resolve como iniciar /criar. Quem chama decide o que fazer com o resultado:
@@ -47,12 +61,30 @@ export async function resolveCartInit(): Promise<CartInitOutcome> {
   const existing = loadSession();
   if (existing) {
     try {
-      const { cart: loaded } = await fetchCart(existing.cartId, existing.editToken);
-      if (EDITABLE_STATUSES.has(loaded.status)) {
+      const { cart: loaded } = await fetchCart(existing.cartId, existing.editToken, {
+        timeoutMs: LOAD_TIMEOUT_MS,
+      });
+      if (isEditableStatus(loaded.status)) {
         return { kind: "resume", cart: loaded, session: existing };
       }
-    } catch {
-      /* token inválido ou carta não encontrada: recomeça abaixo */
+    } catch (err) {
+      // Só token inválido ou carta inexistente encerram a sessão. Uma queda de
+      // rede ou erro do servidor não diz nada sobre o rascunho: encerrar aqui
+      // deixaria a carta inacessível, porque o token só existe neste navegador.
+      const gone = err instanceof ApiClientError && (err.status === 401 || err.status === 404);
+      if (!gone) throw err;
+
+      // O texto que o servidor nunca recebeu não pode sumir junto com a carta.
+      // Só encerra a sessão depois de a carta nova existir: se a criação falhar,
+      // a próxima tentativa encontra tudo como estava.
+      const unsynced = loadUnsyncedChanges(existing.cartId);
+      if (unsynced) {
+        const { cart: created, editToken } = await createDraft(unsynced);
+        const session: CartSession = { cartId: created.id, editToken };
+        saveSession(session);
+        clearDraft();
+        return { kind: "create", cart: created, session, legacyMedia: [], recovered: true };
+      }
     }
     // A sessão não serve mais para retomar (publicada/paga, token inválido ou
     // carta não encontrada). Encerra E limpa o cache de recuperação junto —

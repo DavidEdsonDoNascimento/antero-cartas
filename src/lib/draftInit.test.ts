@@ -8,6 +8,7 @@ const {
   mockLoadDraft,
   mockClearDraft,
   mockHasMeaningfulContent,
+  mockLoadUnsynced,
   mockCreateDraft,
   mockFetchCart,
 } = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ const {
   mockLoadDraft: vi.fn(),
   mockClearDraft: vi.fn(),
   mockHasMeaningfulContent: vi.fn(),
+  mockLoadUnsynced: vi.fn(),
   mockCreateDraft: vi.fn(),
   mockFetchCart: vi.fn(),
 }));
@@ -31,9 +33,11 @@ vi.mock("@/lib/storage", () => ({
   loadDraft: mockLoadDraft,
   clearDraft: mockClearDraft,
   hasMeaningfulContent: mockHasMeaningfulContent,
+  loadUnsyncedChanges: mockLoadUnsynced,
 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
   createDraft: mockCreateDraft,
   fetchCart: mockFetchCart,
 }));
@@ -45,6 +49,7 @@ const {
   resetCartInitPrefetch,
   buildPatch,
 } = await import("./draftInit");
+const { ApiClientError, RequestTimeoutError } = await import("@/lib/api");
 
 function makeCart(overrides: Partial<Cart> = {}): Cart {
   return {
@@ -77,6 +82,7 @@ beforeEach(() => {
   resetCartInitPrefetch();
   mockLoadDraft.mockReturnValue(null);
   mockHasMeaningfulContent.mockReturnValue(false);
+  mockLoadUnsynced.mockReturnValue(null);
 });
 
 describe("resolveCartInit", () => {
@@ -123,9 +129,77 @@ describe("resolveCartInit", () => {
     expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
   });
 
+  it.each([
+    ["queda de rede", new TypeError("Failed to fetch")],
+    ["prazo esgotado", new RequestTimeoutError()],
+    ["erro do servidor", new ApiClientError("server", "Erro interno.", 500)],
+    ["manutenção", new ApiClientError("maintenance", "Em manutenção.", 503)],
+  ])("%s ao ler o rascunho não encerra a sessão nem cria outra carta", async (_nome, erro) => {
+    mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "tok" });
+    mockFetchCart.mockRejectedValue(erro);
+
+    await expect(resolveCartInit()).rejects.toBe(erro);
+
+    expect(mockClearSession).not.toHaveBeenCalled();
+    expect(mockClearDraft).not.toHaveBeenCalled();
+    expect(mockCreateDraft).not.toHaveBeenCalled();
+  });
+
+  it("carta que não existe mais encerra a sessão e começa outra", async () => {
+    mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "tok" });
+    mockFetchCart.mockRejectedValue(new ApiClientError("not_found", "Não encontrado.", 404));
+    mockCreateDraft.mockResolvedValue({ cart: makeCart({ id: "cart_2" }), editToken: "tok2" });
+
+    const outcome = await resolveCartInit();
+
+    expect(mockClearSession).toHaveBeenCalledTimes(1);
+    expect(outcome.kind).toBe("create");
+  });
+
+  it("carta inacessível com texto não salvo: leva o texto para uma carta nova", async () => {
+    const unsynced = { message: "Não posso perder isto" };
+    mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "tok" });
+    mockFetchCart.mockRejectedValue(new ApiClientError("not_found", "Não encontrado.", 404));
+    mockLoadUnsynced.mockReturnValue(unsynced);
+    const created = makeCart({ id: "cart_2", message: unsynced.message });
+    mockCreateDraft.mockResolvedValue({ cart: created, editToken: "tok2" });
+
+    const outcome = await resolveCartInit();
+
+    expect(mockLoadUnsynced).toHaveBeenCalledWith("cart_1");
+    expect(mockCreateDraft).toHaveBeenCalledWith(unsynced);
+    expect(mockSaveSession).toHaveBeenCalledWith({ cartId: "cart_2", editToken: "tok2" });
+    expect(mockClearDraft).toHaveBeenCalled();
+    expect(outcome).toMatchObject({ kind: "create", cart: created, recovered: true });
+  });
+
+  it("se a carta nova não puder ser criada, a sessão e o texto ficam para a próxima tentativa", async () => {
+    const queda = new TypeError("Failed to fetch");
+    mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "tok" });
+    mockFetchCart.mockRejectedValue(new ApiClientError("not_found", "Não encontrado.", 404));
+    mockLoadUnsynced.mockReturnValue({ message: "Não posso perder isto" });
+    mockCreateDraft.mockRejectedValue(queda);
+
+    await expect(resolveCartInit()).rejects.toBe(queda);
+
+    expect(mockClearDraft).not.toHaveBeenCalled();
+    expect(mockClearSession).not.toHaveBeenCalled();
+  });
+
+  it("carta já publicada nunca passa texto guardado para a carta nova", async () => {
+    mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "tok" });
+    mockFetchCart.mockResolvedValue({ cart: makeCart({ status: "PUBLISHED" }) });
+    mockLoadUnsynced.mockReturnValue({ message: "Texto da carta publicada" });
+    mockCreateDraft.mockResolvedValue({ cart: makeCart({ id: "cart_2" }), editToken: "tok2" });
+
+    await resolveCartInit();
+
+    expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
+  });
+
   it("também descarta a sessão quando o token é inválido (fetchCart falha)", async () => {
     mockLoadSession.mockReturnValue({ cartId: "cart_1", editToken: "bad" });
-    mockFetchCart.mockRejectedValue(new Error("401"));
+    mockFetchCart.mockRejectedValue(new ApiClientError("unauthorized", "Token inválido.", 401));
     mockCreateDraft.mockResolvedValue({ cart: makeCart({ id: "cart_2" }), editToken: "tok2" });
 
     const outcome = await resolveCartInit();

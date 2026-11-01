@@ -143,3 +143,17 @@ describe("mediaFramingSchema — o cliente não é a última palavra", () => {
     expect(mediaFramingSchema.safeParse({}).success).toBe(false);
   });
 });
+
+describe("draftUpdateSchema — versão do rascunho", () => {
+  it("aceita o updatedAt devolvido pelo servidor como clientUpdatedAt", () => {
+    const parsed = draftUpdateSchema.safeParse({
+      message: "oi",
+      clientUpdatedAt: new Date("2026-11-01T10:00:00.123Z").toISOString(),
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("recusa uma versão que não é data", () => {
+    expect(draftUpdateSchema.safeParse({ clientUpdatedAt: "ontem" }).success).toBe(false);
+  });
+});
