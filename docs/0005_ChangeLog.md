@@ -1,4 +1,25 @@
 # 0005 — ChangeLog · Antero Cartas
+
+## [Não lançado] — Identidade "Papel e Luz" na landing — 2026-11-01
+
+### Alterado
+- Landing reformulada: hero com envelope e carta em CSS+SVG (abertura animada, respeita
+  `prefers-reduced-motion`), "Como funciona" em três passos ilustrados, vitrine dos quatro
+  temas com o renderizador real das cartas, planos e pagamento, seis dúvidas essenciais e
+  chamada final. Fraunces + DM Sans e a nova paleta valem só nesta página (D76).
+- Removidos da landing: depoimentos de demonstração, faixa superior, etiqueta "Mais escolhido",
+  "Pronta em 3 minutos" e a segunda demonstração duplicada.
+- `content/faq.ts` (9 -> 6 perguntas, prazo e limite de fotos vindos da configuração) e
+  `positioning` em `config/site.ts`.
+
+### Refinado
+- Navegador sem unidades de container (iOS < 16, Chrome < 105): a cena do envelope aparece aberta e
+  estática, em vez de se desmontar (D76).
+- Anel de foco por teclado em todos os controles da landing (3 px, branco no trecho escuro).
+- Subtítulo da hero sem pressupor o gênero de quem recebe.
+
+### Sem alteração
+- Cartas publicadas, temas, editor, checkout, backend, banco e `layout.tsx`/`globals.css`.
 
 ## [Não lançado] — Confiabilidade do rascunho — 2026-11-01
 

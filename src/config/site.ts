@@ -66,15 +66,16 @@ export const site = {
  * Frases de posicionamento reaproveitáveis (podem ser refinadas depois).
  */
 export const positioning = {
-  heroTitle: "Transforme suas palavras em uma",
-  heroHighlight: "experiência inesquecível",
+  // Uma linha por item: a quebra do título da hero é fixa (ver Hero.tsx).
+  heroTitleLines: ["Palavras que", "chegam como", "um abraço."],
   heroSubtitle:
-    "Uma cartinha digital com a sua mensagem, fotos e música. Ela abre no celular por um link só de vocês — sem instalar nada, sem criar conta.",
+    "Escreva sua mensagem, junte fotos e uma música. Quem recebe abre um envelope no celular.",
   heroCta: "Criar minha cartinha",
-  topbar: ["Pagamento único", "Sem mensalidade", "Entrega digital na hora"],
-  closingTitle: "Pronto para preparar a surpresa?",
-  closingSubtitle:
-    "Você escolhe as lembranças. A gente ajuda a transformar tudo em um presente que emociona.",
+  heroSecondaryCta: "Ver um exemplo",
+  heroNote: "Sem cadastro · Pix ou cartão · Pagamento único",
+  closingTitle: "Quem merece uma carta",
+  closingHighlight: "hoje?",
+  closingSubtitle: "Comece agora. Você só paga quando ela estiver pronta.",
 } as const;
 
 /**
