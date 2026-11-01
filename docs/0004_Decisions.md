@@ -767,3 +767,48 @@ apagava esses controles, e a pessoa podia pagar achando que a foto estava na car
 "Próxima etapa" e "Voltar" agora esperam cada foto escolhida ser confirmada ou
 removida. Sair é sempre possível: toda foto pendente, mesmo em envio, tem como ser
 removida. A fila de envio e as novas tentativas do Android não mudaram.
+
+---
+
+# Identidade visual "Papel e Luz" (landing)
+
+## D76 — Identidade nova só na landing, sob o escopo `.pl`
+A nova identidade (paleta, Fraunces + DM Sans, hero com envelope em CSS+SVG) vive em
+`src/styles/paper-light.css` e `src/components/landing/*`. Tudo sob `.pl` / `pl-*`: sem
+seletor de elemento solto, sem token em `:root`, sem `@layer`. O motivo é o mesmo do PR 1
+da task 016: CSS fora de `@layer` vence qualquer utilidade do Tailwind v4, inclusive dentro
+de `CardPreview`. `paperLight.test.ts` falha se uma regra escapar do escopo.
+
+- **Fontes:** `landing/fonts.ts` (`next/font`) é importado só por `app/page.tsx`. O layout raiz
+  segue com Playfair/Inter/Dancing. Custo conhecido: o layout raiz continua pré-carregando as
+  três antigas na landing (+130 KB que a landing quase não usa); sai quando o app migrar.
+  O eixo `opsz` do Fraunces custa +69 KB e dá o desenho de "display" ao título; para cortar,
+  remover `axes: ["opsz"]` em `fonts.ts`.
+- **Cartas intactas:** nenhum renderizador, tema ou estilo global foi alterado. A vitrine de
+  exemplos usa o `CardPreview` real dentro de `.pl-legacy`, que restaura `--font-sans` e a cor
+  do app. Verificado pixel a pixel: 26 de 28 capturas dos 4 temas (fechado/aberto, mobile/desktop)
+  idênticas; as 2 restantes só diferem no contador de segundos de `/demonstracao`.
+- **Honestidade do conteúdo:** a landing não mostra depoimentos (eram exemplos fictícios),
+  a etiqueta "Mais escolhido" (sem dado), "3 minutos" (sem medição) nem garantia (desligada).
+  `landing.test.tsx` trava isso.
+- **Animação:** só `transform`/`opacity`, ~3,6 s, uma vez, iniciada quando o palco entra na tela.
+  Estado inicial "fechado" e animações existem só com `prefers-reduced-motion: no-preference`;
+  com movimento reduzido a cena nasce aberta. O título da hero tem quebra fixa (3 linhas): com
+  a quebra solta, a troca da fonte reserva mudava a altura e gerava CLS de 0,19.
+- **Foco:** o anel global (`box-shadow`, especificidade 0) perdia para botões com sombra
+  própria; em `.pl` o foco é um `outline` com especificidade maior (WCAG 2.4.7). O anel dos trechos escuros é branco; as sobrescritas precisam de
+  especificidade igual ou maior que a do anel base (uma chegou a perder: vinho sobre vinho).
+- **Fallback sem unidades de container:** toda medida da cena usa `--u` (1% da largura do palco).
+  Com suporte, `--u` é `1cqw`; sem (iOS < 16, Chrome < 105) é uma aproximação em `vw`, e a cena
+  nasce ABERTA e estática (nunca fica o espaço da hero vazio). O estado base do envelope é "aberto"
+  (aba fechada recolhida, lacre ausente): só o estado "fechado" da animação devolve os dois. Isso vale
+  também para `prefers-reduced-motion`. Validado reescrevendo o CSS em trânsito (`width:1cqw` inexistente).
+- **Fontes (investigado, sem troca):** limitar os eixos ao usado (Fraunces peso 360-520, DM Sans 400-600)
+  é sem perda de contorno, mas poupa só ~34 KB (-18% das fontes novas, -5% da página) e exigiria
+  abandonar o `next/font` por binários mantidos à mão. O resto do acréscimo (~130 KB) é o
+  pré-carregamento das três fontes antigas pelo layout raiz. O caminho certo é migrar o app para as
+  novas fontes. Já carregamos só os estilos normal e itálico e o subconjunto latino.
+- **LCP:** o grão de papel como `<div>` com `background-image` virava o elemento LCP e, sob CPU lenta,
+  a métrica oscilava. Um filtro `feTurbulence` no SVG foi pior (atrasa a pintura do texto). O grão do
+  envelope vive agora em `::after`, com o mesmo ladrilho barato: LCP estável (~850 ms, igual ao da
+  landing antiga). Sem o grão do bolso o LCP seria ~450 ms (o texto), mas mudaria o acabamento aprovado.
