@@ -34,17 +34,30 @@ interface Props {
   cart: Cart;
   update: (patch: Partial<Cart>) => void;
   session: CartSession;
-  onCartUpdated: (cart: Cart) => void;
   /**
-   * Fotos confirmadas pelo servidor após um envio. Só a lista de fotos — não
-   * a carta inteira: a resposta de um upload que levou 40 s não pode desfazer
-   * o tema ou a data escolhidos enquanto isso. Continua valendo depois que a
+   * Fotos confirmadas pelo servidor, ou a lista otimista de uma reordenação.
+   * Só a lista de fotos, nunca a carta inteira: a resposta de uma operação de
+   * foto traz a carta como o servidor a conhecia e não pode desfazer o texto,
+   * o tema ou a data alterados nesse meio-tempo. Continua valendo depois que a
    * etapa desmonta (o envio em andamento termina e a foto não se perde).
    */
   onMediaChanged: (media: CartMedia[]) => void;
+  /** Fotos escolhidas que o servidor ainda não confirmou. */
+  onUploadStatus?: (status: UploadStatus) => void;
 }
 
-export function StepPersonalize({ cart, update, session, onCartUpdated, onMediaChanged }: Props) {
+export interface UploadStatus {
+  inFlight: number;
+  failed: number;
+}
+
+export function StepPersonalize({
+  cart,
+  update,
+  session,
+  onMediaChanged,
+  onUploadStatus,
+}: Props) {
   return (
     <div>
       <StepHeader
@@ -55,8 +68,8 @@ export function StepPersonalize({ cart, update, session, onCartUpdated, onMediaC
         <PhotosField
           cart={cart}
           session={session}
-          onCartUpdated={onCartUpdated}
           onMediaChanged={onMediaChanged}
+          onUploadStatus={onUploadStatus}
         />
         <CounterField cart={cart} update={update} />
         <MusicPicker cart={cart} update={update} />
@@ -139,9 +152,9 @@ interface UploadJob {
 function PhotosField({
   cart,
   session,
-  onCartUpdated,
   onMediaChanged,
-}: Pick<Props, "cart" | "session" | "onCartUpdated" | "onMediaChanged">) {
+  onUploadStatus,
+}: Pick<Props, "cart" | "session" | "onMediaChanged" | "onUploadStatus">) {
   const inputRef = useRef<HTMLInputElement>(null);
   /** Seletor de uma foto só, aberto por "Escolher de novo". */
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -182,6 +195,12 @@ function PhotosField({
   /** Reordenar/remover/ajustar fotos enviadas espera os envios terminarem. */
   const busy = removing || uploading;
 
+  function reportUploads() {
+    let failed = 0;
+    for (const job of jobsRef.current.values()) if (job.status === "error") failed += 1;
+    onUploadStatus?.({ inFlight: jobsRef.current.size - failed, failed });
+  }
+
   function patchPending(id: string, patch: Partial<PendingPhoto>) {
     setPending((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   }
@@ -195,11 +214,13 @@ function PhotosField({
   ) {
     job.status = status;
     patchPending(id, { status, retryable, reselect });
+    reportUploads();
   }
 
   /** Tira a foto pendente da tela e cancela o que ainda não começou. */
   function forgetPending(id: string) {
     jobsRef.current.delete(id);
+    reportUploads();
     const photo = pendingRef.current.find((p) => p.id === id);
     if (photo) URL.revokeObjectURL(photo.previewUrl);
     setPending((prev) => prev.filter((p) => p.id !== id));
@@ -243,6 +264,7 @@ function PhotosField({
     // escolhido — não quando chegar a vez desta foto na fila.
     reader.prefetch();
     jobsRef.current.set(id, { file, reader, prepared: null, attempt: 1, status: "queued" });
+    reportUploads();
     return { id, previewUrl: URL.createObjectURL(file), status: "queued", retryable: true };
   }
 
@@ -370,7 +392,7 @@ function PhotosField({
     setRemoving(true);
     try {
       const res = await removePhoto(session.cartId, session.editToken, id);
-      onCartUpdated(res.cart);
+      onMediaChanged(res.cart.media);
       track("photo_removed", { count: res.cart.media.length });
     } catch (err) {
       setError(apiErrorMessage(err, "Não foi possível remover a foto."));
@@ -387,13 +409,13 @@ function PhotosField({
         return m ? { ...m, position: i } : null;
       })
       .filter((m): m is NonNullable<typeof m> => m !== null);
-    onCartUpdated({ ...cart, media: optimistic });
+    onMediaChanged(optimistic);
 
     try {
       const res = await reorderPhotos(session.cartId, session.editToken, nextIds);
-      onCartUpdated(res.cart);
+      onMediaChanged(res.cart.media);
     } catch (err) {
-      onCartUpdated({ ...cart, media: previous }); // rollback
+      onMediaChanged(previous); // rollback
       setError(apiErrorMessage(err, "Não foi possível reordenar as fotos."));
     }
   }
@@ -408,16 +430,13 @@ function PhotosField({
     setError(null);
     setAdjustingId(null);
     const previous = cart.media;
-    onCartUpdated({
-      ...cart,
-      media: previous.map((m) => (m.id === mediaId ? { ...m, framing } : m)),
-    });
+    onMediaChanged(previous.map((m) => (m.id === mediaId ? { ...m, framing } : m)));
     try {
       const res = await updatePhotoFraming(session.cartId, session.editToken, mediaId, framing);
-      onCartUpdated(res.cart);
+      onMediaChanged(res.cart.media);
       track("photo_framing_adjusted", { reset: framing ? "no" : "yes" });
     } catch (err) {
-      onCartUpdated({ ...cart, media: previous }); // rollback
+      onMediaChanged(previous); // rollback
       setError(apiErrorMessage(err, "Não foi possível salvar o ajuste da foto."));
     }
   }

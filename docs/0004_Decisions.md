@@ -721,3 +721,49 @@ Environment `producao` (lida no job `imagem`, onde as variáveis da Environment
 existem); sem ela o push na `master` só publica a imagem. Verificar, rollback e
 deploy manual não dependem da chave.
 
+---
+
+# Confiabilidade do rascunho
+
+## D74 — Um salvamento por vez, registro local e versão no envio
+`src/lib/draftSync.ts` assume o autosave de `/criar`. Um PATCH por vez: o que muda
+durante um envio vira um único envio seguinte, com o texto mais recente. Toda
+alteração vai antes para `antero:draft:unsynced` (localStorage, preso ao id da
+carta, sem token), e só sai de lá quando o servidor confirma aquela versão. Na
+retomada, esse registro é aplicado sobre a carta do servidor. `pagehide` com
+`keepalive` é só uma tentativa a mais: o navegador não garante que termine.
+
+Serializar não basta sozinho: um envio abortado pelo prazo pode continuar vivo no
+servidor e gravar depois de um mais novo. Por isso o cliente envia
+`clientUpdatedAt` (campo que já existia no schema, sem uso) e `updateDraft` faz a
+escrita condicional em `updatedAt`, respondendo 409 se a versão passou. Não há
+coluna nova nem migration. Fotos não mudam `Cart.updatedAt`, então não geram
+conflito com o texto. Sem o campo (aba com o site anterior), vale o comportamento
+antigo. Num 409 o cliente lê a carta: se ela já tem o texto enviado, considera
+confirmado sem regravar; senão reenvia sobre a versão nova.
+
+Limitação aceita: duas abas na mesma carta continuam com "vale quem escreveu por
+último". O 409 evita a sobrescrita silenciosa por envio atrasado, não resolve o
+conflito entre duas pessoas escrevendo. O texto fica no localStorage até a
+confirmação, com a mesma exposição que `antero:draft` já tinha, e `clearDraft`
+o apaga na publicação (D46).
+
+A versão é `updatedAt`, gravada com o relógio da aplicação. Por isso a escrita
+versionada sempre a faz andar (`max(agora, base + 1 ms)`): com o relógio igual ou
+atrás da base, ela se repetiria e um envio atrasado passaria pela comparação. A
+comparação e a gravação são um único `UPDATE ... WHERE`, então valem entre instâncias.
+
+Revê parte de D45/D46: uma falha de rede ou 5xx ao ler o rascunho deixou de encerrar
+a sessão. Só 401/404 encerram, porque o token existe apenas neste navegador e
+encerrar por engano deixaria a carta inacessível.
+
+Se a carta ficou inacessível (401/404) e há texto não salvo, ele vira uma carta
+nova em vez de sumir com a sessão, que só termina depois de a nova existir. Carta
+publicada nunca passa texto adiante.
+
+## D75 — Foto pendente impede sair da etapa de fotos
+"Falhou", "Tentar de novo" e "Remover" só existem em `PhotosField`. Sair da etapa
+apagava esses controles, e a pessoa podia pagar achando que a foto estava na carta.
+"Próxima etapa" e "Voltar" agora esperam cada foto escolhida ser confirmada ou
+removida. Sair é sempre possível: toda foto pendente, mesmo em envio, tem como ser
+removida. A fila de envio e as novas tentativas do Android não mudaram.

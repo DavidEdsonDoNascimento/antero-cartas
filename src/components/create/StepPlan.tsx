@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { Cart, PlanType } from "@/lib/types";
 import { plans, formatBRL } from "@/config/plans";
 import { flags } from "@/config/flags";
@@ -9,9 +10,20 @@ interface Props {
   cart: Cart;
   update: (patch: Partial<Cart>) => void;
   onContinue: () => void;
+  /** A carta está sendo confirmada no servidor antes de seguir ao pagamento. */
+  busy?: boolean;
+  /** Por que não seguiu ao pagamento. */
+  error?: string | null;
 }
 
-export function StepPlan({ cart, update, onContinue }: Props) {
+export function StepPlan({ cart, update, onContinue, busy = false, error = null }: Props) {
+  const errorRef = useRef<HTMLParagraphElement>(null);
+
+  // No celular o aviso nasce abaixo da dobra, junto do botão que acabou de ser tocado.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView?.({ block: "center" });
+  }, [error]);
+
   return (
     <div>
       <StepHeader
@@ -73,9 +85,15 @@ export function StepPlan({ cart, update, onContinue }: Props) {
           : "Você será direcionado ao pagamento seguro."}
       </div>
 
+      {error && (
+        <p ref={errorRef} role="alert" className="mt-5 rounded-xl bg-vinho/10 p-3 text-center text-sm text-vinho">
+          {error}
+        </p>
+      )}
+
       <div className="mt-5 flex justify-center">
-        <PrimaryButton onClick={onContinue} disabled={!cart.planType}>
-          Continuar para o pagamento →
+        <PrimaryButton onClick={onContinue} disabled={!cart.planType || busy}>
+          {busy ? "Salvando sua cartinha…" : "Continuar para o pagamento →"}
         </PrimaryButton>
       </div>
     </div>

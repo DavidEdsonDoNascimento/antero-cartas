@@ -93,20 +93,37 @@ export function createDraft(initial?: CartPatch): Promise<{ cart: Cart; editToke
   });
 }
 
-export function fetchCart(cartId: string, token: string): Promise<{ cart: Cart }> {
-  return request(`/api/carts/${cartId}`, { token });
+export function fetchCart(
+  cartId: string,
+  token: string,
+  options: { timeoutMs?: number } = {},
+): Promise<{ cart: Cart }> {
+  return request(`/api/carts/${cartId}`, { token, timeoutMs: options.timeoutMs });
 }
 
+/**
+ * Prazo de um salvamento. Sem ele, uma conexão que trava deixaria o rascunho
+ * "salvando" para sempre, com todos os salvamentos seguintes na fila.
+ */
+const SAVE_TIMEOUT_MS = 20_000;
+
+/**
+ * `clientUpdatedAt` é a versão em que este envio se baseia: se a carta mudou
+ * desde então, o servidor responde 409 em vez de gravar (ver `updateDraft`).
+ */
 export function patchCart(
   cartId: string,
   token: string,
   patch: CartPatch,
+  options: { clientUpdatedAt?: string; keepalive?: boolean } = {},
 ): Promise<{ cart: Cart }> {
   return request(`/api/carts/${cartId}`, {
     method: "PATCH",
     token,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch),
+    body: JSON.stringify({ ...patch, clientUpdatedAt: options.clientUpdatedAt }),
+    timeoutMs: SAVE_TIMEOUT_MS,
+    keepalive: options.keepalive,
   });
 }
 

@@ -1,5 +1,23 @@
 # 0005 — ChangeLog · Antero Cartas
 
+## [Não lançado] — Confiabilidade do rascunho — 2026-11-01
+
+### Corrigido
+- Texto digitado logo antes de sair da tela, fechar a aba ou perder a conexão não
+  se perde mais: fica no aparelho até o servidor confirmar, e volta na retomada.
+- Falha de rede ao abrir `/criar` não abandona mais o rascunho.
+- Respostas de foto (remover, reordenar, enquadrar) não desfazem mais texto, tema
+  ou data alterados enquanto a resposta não vinha.
+- Salvamentos não concorrem mais entre si, e um envio atrasado é recusado pelo
+  servidor em vez de sobrescrever um texto mais novo (D74).
+- Falhas transitórias são repetidas sozinhas. Erro definitivo explica o que houve
+  e oferece "Tentar de novo".
+- "Salvando…" só aparece quando há algo sendo salvo.
+- O avanço ao checkout espera a confirmação do servidor. Se o
+  salvamento falhar, a pessoa fica no editor e pode tentar de novo.
+- Foto em envio ou com falha impede sair da etapa de fotos, para ninguém pagar
+  achando que ela foi incluída (D75).
+
 ## [Infra] — Deploy automático da master no Coolify (D73) — 2026-10-29
 
 - `docker-image.yml`: push na `master` → verificar → imagem (GHCR,

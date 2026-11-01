@@ -70,6 +70,33 @@ export async function updateDraft(
 ): Promise<Cart> {
   const row = await loadRowWithToken(cartId, token);
   requireEditable(row.status);
+
+  // Com a versão informada, a escrita é condicional na própria consulta: um
+  // envio atrasado, baseado numa versão que já passou, não sobrescreve um texto
+  // mais novo. Sem ela (aba aberta numa versão anterior do site), vale o de sempre.
+  if (input.clientUpdatedAt) {
+    const base = new Date(input.clientUpdatedAt);
+    const version = new Date(Math.max(Date.now(), base.getTime() + 1));
+    const { count } = await prisma.cart.updateMany({
+      where: {
+        id: cartId,
+        updatedAt: base,
+        status: { in: ["DRAFT", "AWAITING_PAYMENT"] },
+      },
+      // A versão sempre anda: com o relógio da instância igual ou atrás da base
+      // (mesmo milissegundo, relógios divergentes), ela se repetiria e um envio
+      // atrasado passaria pela comparação acima.
+      data: { ...buildUpdateData(input), updatedAt: version },
+    });
+    if (count === 0) {
+      requireEditable((await loadRow(cartId)).status);
+      throw new ApiError("conflict", "A cartinha mudou desde o último salvamento.");
+    }
+    // A versão desta escrita, não a da releitura: se outra instância gravou nesse
+    // meio-tempo, o próximo envio desta aba precisa receber o 409 e ficar sabendo.
+    return { ...toDomainCart(await loadRow(cartId)), updatedAt: version.toISOString() };
+  }
+
   const updated = await prisma.cart.update({
     where: { id: cartId },
     data: buildUpdateData(input),
