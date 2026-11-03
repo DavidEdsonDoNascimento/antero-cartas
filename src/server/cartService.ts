@@ -330,12 +330,17 @@ export async function reorderMedia(
 
 // --- Publicação ------------------------------------------------------------
 
-/** Requisitos mínimos para publicar. Lança conflito se incompleta. */
+/**
+ * Requisitos mínimos para publicar. Lança conflito se incompleta.
+ *
+ * O remetente (`senderName`) é opcional. Esta regra roda dentro da transação
+ * de confirmação do pagamento: voltar a exigi-lo com pedidos PENDING de
+ * cartas sem remetente faria um pagamento aprovado falhar ao publicar.
+ */
 export function assertPublishable(row: DbCartRow): void {
   const ok =
     row.title.trim() &&
     row.message.trim() &&
-    row.senderName.trim() &&
     row.recipientType &&
     row.planType;
   if (!ok) throw new ApiError("conflict", "Cartinha incompleta para publicação.");
