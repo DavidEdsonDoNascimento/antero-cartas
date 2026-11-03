@@ -103,7 +103,8 @@ export async function createOrder(
     throw new ApiError("forbidden_state", "Esta carta já foi processada.");
   }
 
-  const contentOk = cart.title.trim() && cart.message.trim() && cart.senderName.trim() && cart.recipientType;
+  // Remetente é opcional; os mesmos requisitos de `assertPublishable`, sem o plano.
+  const contentOk = cart.title.trim() && cart.message.trim() && cart.recipientType;
   if (!contentOk) {
     throw new ApiError("conflict", "Complete a cartinha antes de ir para o pagamento.");
   }
