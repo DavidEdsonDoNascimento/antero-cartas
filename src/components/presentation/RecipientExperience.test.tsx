@@ -253,6 +253,105 @@ describe("selo de música do envelope fechado", () => {
   });
 });
 
+/**
+ * Indicador flutuante antigo ("Com música" / "Ir para música", canto inferior
+ * esquerdo, só no celular por `lg:hidden`): com o envelope fechado o aviso de
+ * música é só o selo novo; depois de aberta, o comportamento de sempre.
+ * O jsdom não avalia CSS, então aqui se confere a PRESENÇA no DOM; que o
+ * indicador some no desktop por `lg:hidden` é conferido pela classe do contêiner
+ * e, de verdade, no Chrome (relatório).
+ */
+describe("indicador flutuante de música (sem duplicar o selo)", () => {
+  const closedBadge = () => container.querySelector('[role="img"][aria-label="Esta cartinha tem música"]');
+  const openedBadge = () => container.querySelector('a[href="#musica-da-cartinha"]');
+  const dock = () => container.querySelectorAll(".card-float-dock");
+  const seal = () => container.querySelector('.card-float-dock a[href="/criar"]');
+
+  it("fechado, com música: só o selo novo (nenhum 'Com música' flutuante)", () => {
+    render();
+    expect(musicTag()).not.toBeNull();
+    expect(closedBadge()).toBeNull();
+    expect(openedBadge()).toBeNull();
+    expect(container.textContent).not.toContain("Com música");
+    expect(seal()).not.toBeNull(); // o selo flutuante de criação não foi tocado
+  });
+
+  it("fechado, sem música: nenhum indicador de música, de nenhum tipo", () => {
+    render({ letter: withoutMusic });
+    expect(musicTag()).toBeNull();
+    expect(closedBadge()).toBeNull();
+    expect(openedBadge()).toBeNull();
+    expect(container.textContent).not.toContain("música");
+  });
+
+  it("abrindo, com música: o indicador antigo continua fora (o selo novo sai por opacidade)", () => {
+    render();
+    act(() => envelopeButton().click());
+    expect(container.querySelector('[data-state="opening"]')).not.toBeNull();
+    expect(closedBadge()).toBeNull();
+    expect(openedBadge()).toBeNull();
+    expect(container.querySelector(".ps-closed")?.getAttribute("data-opening")).toBe("true");
+  });
+
+  it("aberta, com música: o atalho 'Ir para música' aparece, como sempre; o selo novo some", () => {
+    render();
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    expect(musicTag()).toBeNull();
+    expect(closedBadge()).toBeNull(); // só a versão "aberta" do indicador existe
+    const link = openedBadge() as HTMLAnchorElement;
+    expect(link).not.toBeNull();
+    expect(link.textContent).toContain("Ir para música");
+    expect(container.querySelector("#musica-da-cartinha iframe")).not.toBeNull();
+  });
+
+  it("aberta, sem música: nenhum indicador", () => {
+    render({ letter: withoutMusic });
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    expect(openedBadge()).toBeNull();
+    expect(closedBadge()).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("com movimento reduzido (abre direto): o indicador aparece só depois de aberta", () => {
+    reduced = true;
+    render();
+    expect(closedBadge()).toBeNull();
+    act(() => envelopeButton().click());
+    expect(closedBadge()).toBeNull();
+    expect(openedBadge()).not.toBeNull();
+  });
+
+  it("o indicador é só do celular: o contêiner leva lg:hidden (no desktop nunca aparece)", () => {
+    render();
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    const withBadge = [...dock()].find((d) => d.querySelector('a[href="#musica-da-cartinha"]'))!;
+    expect(withBadge.className).toContain("lg:hidden");
+    expect(withBadge.className).toContain("fixed");
+  });
+
+  it("preview do editor: nenhum flutuante, em nenhum estado, e nada de música real", () => {
+    render({ preview: true });
+    expect(dock()).toHaveLength(0);
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    expect(dock()).toHaveLength(0);
+    expect(openedBadge()).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it.each(PRESENTATION_IDS)("estilo %s: fechado sem duplicar, aberto com o atalho", (style) => {
+    render({ style });
+    expect(musicTag()).not.toBeNull();
+    expect(closedBadge()).toBeNull();
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    expect(openedBadge()).not.toBeNull();
+  });
+});
+
 describe("visualização \"Ver como vai abrir\"", () => {
   it("o envelope também abre, mas nunca toca música nem mostra compartilhar", () => {
     render({ preview: true });

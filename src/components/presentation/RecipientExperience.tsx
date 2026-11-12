@@ -197,7 +197,14 @@ export function RecipientExperience({
 
       <EffectsLayer effect={effect} style={preset.id} uid={fxUid} play={stage === "open"} />
 
-      {!preview && <CardFloatingActions opened={stage === "open"} hasMusic={!!letter.music} theme={theme} />}
+      {/* O indicador flutuante de música só entra com a carta aberta: com o envelope
+          fechado (e durante a abertura) o aviso de música é o selo "Uma música
+          especial" (`MusicTag`), e mostrar os dois seria redundante. Depois de aberta
+          o comportamento é o de sempre (atalho para o player). A carta legada usa o
+          mesmo componente e não passa por aqui. */}
+      {!preview && (
+        <CardFloatingActions opened={stage === "open"} hasMusic={!!letter.music && stage === "open"} theme={theme} />
+      )}
     </div>
   );
 }

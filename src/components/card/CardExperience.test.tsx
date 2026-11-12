@@ -168,6 +168,16 @@ describe("estado fechado", () => {
   });
 });
 
+describe("carta legada: indicador flutuante de música preservado", () => {
+  it("fechada, com música: continua mostrando o 'Com música' flutuante (a carta legada não tem o selo novo)", () => {
+    render();
+    const badge = container.querySelector('[role="img"][aria-label="Esta cartinha tem música"]');
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toContain("Com música");
+    expect(container.textContent).not.toContain("Uma música especial");
+  });
+});
+
 describe("estado aberto", () => {
   beforeEach(() => {
     render();
