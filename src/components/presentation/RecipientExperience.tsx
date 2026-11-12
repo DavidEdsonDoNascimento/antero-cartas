@@ -6,9 +6,9 @@ import { LetterSheet, type LetterContent } from "@/components/letter/LetterSheet
 import { OpenCardMusic } from "@/components/card/CardExperience";
 import { CardCreateInvite } from "@/components/card/CardCreateInvite";
 import { CardFloatingActions } from "@/components/card/CardFloatingActions";
-import { NoteIcon } from "@/components/paper-light/icons";
 import { track } from "@/lib/analytics";
 import { EffectsLayer } from "./EffectsLayer";
+import { MusicTag } from "./MusicTag";
 import { presetVars } from "./tokens";
 
 type Stage = "closed" | "opening" | "open";
@@ -33,15 +33,21 @@ function isLowEndDevice(): boolean {
 
 /**
  * Abertura da carta com estilo (2.0): cenário, envelope fechado com o nome,
- * "Abrir minha carta", lacre, aba, carta subindo e efeitos — e então a carta
- * inteira para ler.
+ * lacre, aba, carta subindo e efeitos — e então a carta inteira para ler.
+ *
+ * O próprio envelope é o controle: um `<button>` real sobreposto a ele (mesmo
+ * retângulo, mesmo padrão do `pl-stage__hit` da landing). Um `div` dentro de
+ * `button` seria HTML inválido, e a animação continua comandada só pelo
+ * `data-state` do palco. Enter e Espaço valem pelo próprio botão.
  *
  * - O cenário e o envelope chegam prontos do servidor (`scene`, `envelope`):
  *   o desenho não entra no JavaScript desta página.
  * - A carta inteira já está no HTML (`hidden` até abrir). Sem JavaScript, o
  *   `<noscript>` mostra a carta direto; com movimento reduzido, abre sem
  *   animação.
- * - A música monta no toque de abrir (dentro do gesto, como a carta legada).
+ * - A música monta no clique do envelope (dentro do gesto, como a carta
+ *   legada): é o mesmo `onClick`, então o navegador a trata como iniciada pelo
+ *   usuário, com mouse, toque ou teclado.
  * - Depois de abrir, o foco vai para o título da carta.
  * - `preview`: usado pelo editor ("Ver como vai abrir"): sem música tocando,
  *   sem compartilhar nem convite.
@@ -70,6 +76,8 @@ export function RecipientExperience({
   const [stage, setStage] = useState<Stage>("closed");
   const [lowFx, setLowFx] = useState(false);
   const headingId = useId();
+  /** Abertura já disparada: dois toques no mesmo instante nunca abrem duas vezes. */
+  const startedRef = useRef(false);
   // Ids de `<defs>` SVG: sem os caracteres especiais que o React usa no useId.
   const fxUid = `fx${headingId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const timer = useRef<number | null>(null);
@@ -93,7 +101,8 @@ export function RecipientExperience({
   }, [stage, headingId]);
 
   function handleOpen() {
-    if (stage !== "closed") return;
+    if (startedRef.current || stage !== "closed") return;
+    startedRef.current = true;
     if (!preview) track("cart_opened", { theme: preset.id, hasMusic: !!letter.music, presentation: true });
     if (prefersReducedMotion()) {
       setStage("open");
@@ -114,23 +123,34 @@ export function RecipientExperience({
 
       <main className="ps-main">
         {stage !== "open" && (
-          <section className="ps-closed" aria-labelledby={`${headingId}-closed`}>
+          <section
+            className="ps-closed"
+            aria-labelledby={`${headingId}-closed`}
+            data-opening={stage === "opening" || undefined}
+          >
             <h1 id={`${headingId}-closed`} className="ps-sr">
               {recipient ? `Uma cartinha para ${recipient}` : "Uma cartinha para você"}
             </h1>
             <p className="ps-plaque">Uma surpresa foi preparada para você</p>
             <div className="ps-stage" data-state={stage === "opening" ? "opening" : "closed"}>
-              <div className="ps-stage__art">{envelope}</div>
+              <div className="ps-stage__art">
+                {envelope}
+                {/* O envelope inteiro é o botão. `aria-disabled` (e não `disabled`) enquanto
+                    abre: o foco não se perde e novas ativações são ignoradas. */}
+                <button
+                  type="button"
+                  className="ps-stage__hit"
+                  onClick={handleOpen}
+                  aria-disabled={stage === "opening" || undefined}
+                  aria-label={recipient ? `Abrir a cartinha para ${recipient}` : "Abrir a cartinha"}
+                />
+              </div>
             </div>
-            <button type="button" className="ps-btn" onClick={handleOpen} disabled={stage === "opening"}>
-              {stage === "opening" ? "Abrindo…" : "Abrir minha carta"}
-            </button>
-            {letter.music && (
-              <p className="ps-plaque ps-plaque--muted">
-                <NoteIcon width={16} height={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />
-                Esta cartinha tem música. Ela começa quando você abrir.
-              </p>
-            )}
+            {letter.music && <MusicTag />}
+            <p className="ps-hint">Toque no envelope para abrir sua cartinha</p>
+            <p role="status" className="ps-sr">
+              {stage === "opening" ? "Abrindo a cartinha…" : ""}
+            </p>
             {preview && onClose && (
               <button type="button" className="ps-btn ps-btn--ghost" onClick={onClose}>
                 Voltar para a edição

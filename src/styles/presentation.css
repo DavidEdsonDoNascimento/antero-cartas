@@ -126,6 +126,7 @@
 
 .ps-btn:focus-visible,
 .ps-link:focus-visible,
+.ps-stage__hit:focus-visible,
 .ps-sheet__title:focus-visible {
   outline: 3px solid var(--ps-focus, #1a73e8);
   outline-offset: 3px;
@@ -1705,4 +1706,137 @@
 .ps-main--center {
   min-height: 100dvh;
   justify-content: center;
+}
+
+/* --------------------------------------------------------------------------
+   Abertura pelo envelope (v2.1)
+
+   O botão é uma camada transparente com o MESMO retângulo do `.ps-env` (mesma
+   geometria: 88% da largura, 560/336, 4 unidades acima do pé do palco). Fica
+   acima de todas as camadas do envelope (a mais alta é o lacre, z 7) e o resto
+   da cena, a carta (`pointer-events: none`) e o selo de música não o cobrem.
+   -------------------------------------------------------------------------- */
+.ps-stage__hit {
+  position: absolute;
+  z-index: 8;
+  left: 6%;
+  width: 88%;
+  bottom: calc(4 * var(--u));
+  aspect-ratio: 560 / 336;
+  padding: 0;
+  border: 0;
+  border-radius: calc(1.8 * var(--u));
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Abrindo: ignora toques novos (o `aria-disabled` cobre o teclado e o leitor de tela). */
+.ps-stage[data-state="opening"] .ps-stage__hit {
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Dica e selo de música do envelope fechado: saem de cena (sem mudar a altura da
+   seção, para o envelope não pular) quando a abertura começa. */
+.ps-hint {
+  margin: 0;
+  max-width: 100%;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--ps-backdrop);
+  color: var(--ps-text-muted);
+  font-family: var(--ps-font-display);
+  font-style: italic;
+  font-size: 1.0625rem;
+  line-height: 1.35;
+  text-align: center;
+  box-shadow: 0 6px 20px -12px rgba(30, 10, 18, 0.45);
+  transition: opacity 0.3s ease;
+}
+
+.ps-music-tag {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 0;
+  padding: 6px 16px 6px 6px;
+  border-radius: 999px;
+  background: var(--ps-backdrop);
+  color: var(--ps-text);
+  font: 600 0.9375rem/1 var(--ps-font-body);
+  white-space: nowrap;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ps-text-muted) 22%, transparent),
+    0 8px 18px -12px rgba(30, 10, 18, 0.55);
+  transform: rotate(-1.5deg);
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.ps-music-tag__disc {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--ps-button);
+  color: var(--ps-on-button);
+}
+
+.ps-music-tag__disc svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Notinhas decorativas: invisíveis por padrão; sobem e somem algumas vezes. Não
+   imitam equalizador (não há áudio tocando no envelope fechado). */
+.ps-music-tag__note {
+  position: absolute;
+  top: -4px;
+  width: 11px;
+  height: auto;
+  color: var(--ps-button);
+  opacity: 0;
+}
+
+.ps-music-tag__note--1 {
+  right: 14px;
+}
+
+.ps-music-tag__note--2 {
+  right: 34px;
+  width: 8px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ps-music-tag__note {
+    animation: ps-note-float 3.2s ease-in-out 1.4s 3 both;
+  }
+
+  .ps-music-tag__note--2 {
+    animation-delay: 2.3s;
+  }
+}
+
+@keyframes ps-note-float {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) rotate(-8deg);
+  }
+
+  30% {
+    opacity: 0.9;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) rotate(10deg);
+  }
+}
+
+.ps-closed[data-opening] .ps-hint,
+.ps-closed[data-opening] .ps-music-tag {
+  opacity: 0;
 }
