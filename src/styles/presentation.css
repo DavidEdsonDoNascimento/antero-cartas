@@ -1790,12 +1790,14 @@
   height: 16px;
 }
 
-/* Notinhas decorativas: invisíveis por padrão; sobem e somem algumas vezes. Não
-   imitam equalizador (não há áudio tocando no envelope fechado). */
+/* Notinhas decorativas: invisíveis por padrão. Com o envelope fechado, sobem e
+   somem em ciclos calmos (~2,5 s visíveis a cada 7 s), até a carta abrir: o selo
+   sai de cena com `.ps-closed`, e a animação junto. Só `transform` e `opacity`
+   (compositor). Não imitam equalizador (não há áudio tocando no envelope fechado). */
 .ps-music-tag__note {
   position: absolute;
-  top: -4px;
-  width: 11px;
+  top: -6px;
+  width: 13px;
   height: auto;
   color: var(--ps-button);
   opacity: 0;
@@ -1806,17 +1808,19 @@
 }
 
 .ps-music-tag__note--2 {
-  right: 34px;
-  width: 8px;
+  right: 36px;
+  width: 10px;
 }
 
+/* Única animação contínua da apresentação (pedido do produto): pequena, lenta,
+   decorativa e parada com movimento reduzido, quando fica só o selo estático. */
 @media (prefers-reduced-motion: no-preference) {
   .ps-music-tag__note {
-    animation: ps-note-float 3.2s ease-in-out 1.4s 3 both;
+    animation: ps-note-float 7s ease-out 1.2s infinite both;
   }
 
   .ps-music-tag__note--2 {
-    animation-delay: 2.3s;
+    animation-delay: 2.1s;
   }
 }
 
@@ -1826,13 +1830,22 @@
     transform: translateY(6px) rotate(-8deg);
   }
 
-  30% {
-    opacity: 0.9;
+  8% {
+    opacity: 1;
+  }
+
+  28% {
+    opacity: 0.85;
+  }
+
+  38% {
+    opacity: 0;
+    transform: translateY(-20px) rotate(10deg);
   }
 
   100% {
     opacity: 0;
-    transform: translateY(-16px) rotate(10deg);
+    transform: translateY(-20px) rotate(10deg);
   }
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useId, useRef, type ReactNode } from "react";
 
 /**
  * Painel de "Deixar mais especial" (fotos, música, contador, título).
@@ -26,13 +26,17 @@ export function ExtraPanel({
   const titleId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
 
+  // O foco vai para o título só quando o painel ABRE. O editor recria `onClose` a
+  // cada render (cada tecla, cada "Salvando…"); se ele fosse dependência deste
+  // efeito, o foco sairia do campo em que a pessoa está digitando.
+  const onEscape = useEffectEvent((e: KeyboardEvent) => e.key === "Escape" && onClose());
   useEffect(() => {
     if (!open) return;
     headingRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => onEscape(e);
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   return (
     <div

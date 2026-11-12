@@ -726,7 +726,7 @@ export function CreateFlow() {
         <PhotosField cart={cart} session={session} onMediaChanged={applyServerMedia} onUploadStatus={setUploads} />
       </ExtraPanel>
       <ExtraPanel open={loc.panel === "musica"} title={PANEL_TITLES.musica} onClose={closePanel}>
-        <MusicPicker cart={cart} update={update} />
+        <MusicPicker cart={cart} update={update} active={loc.panel === "musica"} />
       </ExtraPanel>
       <ExtraPanel open={loc.panel === "tempo"} title={PANEL_TITLES.tempo} onClose={closePanel}>
         <CounterField cart={cart} update={update} />

@@ -16,6 +16,8 @@ import { FieldLabel, TextField } from "./ui";
 interface Props {
   cart: Cart;
   update: (patch: Partial<Cart>) => void;
+  /** O painel está aberto. Fechado, ele continua montado (só `hidden`), mas a prévia para. */
+  active: boolean;
 }
 
 type Tab = "search" | "manual";
@@ -24,7 +26,7 @@ type Tab = "search" | "manual";
  * Seleção de música: pesquisa no YouTube (principal) ou colar link (alternativa).
  * A chave da API fica no servidor; aqui só chamamos /api/youtube/search.
  */
-export function MusicPicker({ cart, update }: Props) {
+export function MusicPicker({ cart, update, active }: Props) {
   const [tab, setTab] = useState<Tab>(SEARCH_UI_ENABLED ? "search" : "manual");
   const selected = cart.music;
 
@@ -43,7 +45,9 @@ export function MusicPicker({ cart, update }: Props) {
 
       {selected && (
         <SelectedMusicCard
+          key={selected.videoId} // trocar de música encerra a prévia da anterior
           music={selected}
+          active={active}
           onRemove={remove}
           onChange={() => setTab("search")}
           canSearch={SEARCH_UI_ENABLED}
@@ -389,16 +393,26 @@ function ManualPanel({
 // ---------------------------------------------------------------------------
 function SelectedMusicCard({
   music,
+  active,
   onRemove,
   onChange,
   canSearch,
 }: {
   music: SelectedMusic;
+  active: boolean;
   onRemove: () => void;
   onChange: () => void;
   canSearch: boolean;
 }) {
   const [preview, setPreview] = useState(false);
+  // Fechar o painel (Pronto, X, Esc, fundo, Voltar, Finalizar) encerra a prévia:
+  // o painel só fica `hidden`, e um iframe escondido continua tocando. Ao reabrir,
+  // ela começa parada.
+  const [wasActive, setWasActive] = useState(active);
+  if (active !== wasActive) {
+    setWasActive(active);
+    if (!active) setPreview(false);
+  }
 
   function togglePreview() {
     setPreview((v) => {

@@ -6,8 +6,8 @@ import { NoteIcon } from "@/components/paper-light/icons";
  * Só informa que a carta tem música; não é um player e não toca nada. Por isso
  * NÃO imita um equalizador: no estado fechado o áudio ainda não existe, e barras
  * pulsando passariam a ideia de que já está tocando. O único movimento são duas
- * notinhas que sobem e somem algumas vezes (finito, só sem
- * `prefers-reduced-motion`, ver `presentation.css`).
+ * notinhas que sobem e somem em ciclos calmos enquanto o envelope está fechado
+ * (só sem `prefers-reduced-motion`, ver `presentation.css`).
  *
  * Decorativo para o toque (`pointer-events: none` no CSS): nunca bloqueia o
  * envelope. Para leitores de tela, o texto visível é escondido e no lugar vai a

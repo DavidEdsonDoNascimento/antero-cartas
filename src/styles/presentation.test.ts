@@ -78,8 +78,11 @@ describe("escopo do CSS da apresentação", () => {
     expect(css).not.toMatch(/@layer|@import|@font-face/);
   });
 
-  it("nenhuma animação infinita (WCAG 2.2.2: nada se mexe para sempre)", () => {
-    expect(css).not.toMatch(/infinite/);
+  it("nenhuma animação infinita além das notinhas do selo de música (WCAG 2.2.2)", () => {
+    // Exceção decidida pelo produto: as notinhas repetem enquanto o envelope está
+    // fechado, só sem movimento reduzido; abrir a carta remove o selo.
+    const infinite = [...css.matchAll(/([^{}]+)\{[^{}]*\binfinite\b[^{}]*\}/g)].map((m) => m[1].trim());
+    expect(infinite).toEqual([".ps-music-tag__note"]);
   });
 
   it("efeitos somem com movimento reduzido", () => {
@@ -127,10 +130,18 @@ describe("abertura pelo envelope (v2.1)", () => {
     expect(rule(".ps-music-tag")).toContain("pointer-events: none");
   });
 
-  it("a animação das notinhas é finita e só roda sem movimento reduzido", () => {
-    expect(css).toMatch(
-      /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.ps-music-tag__note\s*\{[^}]*animation:\s*ps-note-float\s+[\d.]+s\s+ease-in-out\s+[\d.]+s\s+3\s+both/,
+  it("as notinhas repetem em ciclos calmos (5–8 s) e só sem movimento reduzido", () => {
+    const m = css.match(
+      /@media \(prefers-reduced-motion: no-preference\)\s*\{\s*\.ps-music-tag__note\s*\{[^}]*animation:\s*ps-note-float\s+([\d.]+)s\s+[\w-]+\s+[\d.]+s\s+infinite\s+both/,
     );
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(5);
+    expect(Number(m![1])).toBeLessThanOrEqual(8);
+    // há uma pausa: a nota some antes do fim do ciclo e fica invisível até recomeçar
+    const frames = css.slice(css.indexOf("@keyframes ps-note-float"));
+    expect(frames).toMatch(/100%\s*\{\s*opacity:\s*0/);
+    // só propriedades do compositor
+    expect(frames.slice(0, frames.indexOf("\n}\n"))).not.toMatch(/\b(top|left|right|bottom|width|height|margin)\s*:/);
     // fora do bloco `no-preference`, as notinhas ficam invisíveis e sem animação
     expect(rule(".ps-music-tag__note")).toContain("opacity: 0");
     expect(rule(".ps-music-tag__note")).not.toContain("animation");
