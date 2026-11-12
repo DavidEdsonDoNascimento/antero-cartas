@@ -774,7 +774,7 @@ export function CreateFlow() {
   );
 }
 
-/** "Ver como vai abrir": a experiência real de `/c/`, em tela cheia, sem música nem compartilhar. */
+/** "Ver como vai abrir": a experiência real de `/c/`, em tela cheia (fotos e música como na carta recebida), sem compartilhar. */
 function OpeningPreview({ cart, onClose }: { cart: Cart; onClose: () => void }) {
   const preset = getPreset(cart.presentation);
   const recipient = cart.recipientName.trim();

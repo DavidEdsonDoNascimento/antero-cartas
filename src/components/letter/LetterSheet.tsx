@@ -29,18 +29,28 @@ export type LetterContent = Pick<
  * - Fotos: o mesmo `PhotoCarousel` (e o mesmo enquadramento) da carta antiga.
  * - Música: aqui só o indicador; o player fica fora da folha e só monta depois
  *   do gesto de abrir (`RecipientExperience`). Nenhuma imagem de terceiros.
- * - `preview`: textos de exemplo enquanto a mensagem está vazia, fotos paradas.
+ * - `preview`: textos de exemplo enquanto a mensagem está vazia, fotos paradas e
+ *   música só informada (prévia inline do editor). `autoAdvance` e `musicPlays`
+ *   desligam essas duas últimas partes de forma independente: a demonstração
+ *   "Ver como vai abrir" (`RecipientExperience` em `preview`) passa fotos e
+ *   música como na carta recebida e continua sem compartilhar nem convite.
  */
 export function LetterSheet({
   letter,
   theme,
   preview = false,
+  autoAdvance = !preview,
+  musicPlays = !preview,
   headingId,
   headingLevel = 2,
 }: {
   letter: LetterContent;
   theme: LetterTheme;
   preview?: boolean;
+  /** Fotos passam sozinhas (carrossel). Por padrão, só fora da prévia inline. */
+  autoAdvance?: boolean;
+  /** A música desta carta toca de verdade (muda o texto do indicador). Por padrão, só fora da prévia inline. */
+  musicPlays?: boolean;
   /** Id do título, para o foco ir até ele depois de abrir. */
   headingId?: string;
   /** 1 na carta aberta (é o título da página); 2 dentro do editor. */
@@ -91,7 +101,7 @@ export function LetterSheet({
             mutedColor={theme.inkMuted}
             frame={theme.photoFrame}
             tilt={theme.tilt}
-            autoAdvance={!preview}
+            autoAdvance={autoAdvance}
           />
         </div>
       )}
@@ -128,7 +138,7 @@ export function LetterSheet({
           <span className="ps-sheet__music-text">
             <span className="ps-sheet__music-title">{letter.music.title ?? "Música da cartinha"}</span>
             <span className="ps-sheet__music-hint">
-              {preview ? "Toca quando o envelope abrir" : letter.music.channelTitle ?? "Música da cartinha"}
+              {musicPlays ? letter.music.channelTitle ?? "Música da cartinha" : "Toca quando o envelope abrir"}
             </span>
           </span>
         </div>

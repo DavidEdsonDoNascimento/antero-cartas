@@ -23,6 +23,7 @@ import { framingStyle } from "@/lib/photoFraming";
 import { PhotoCarousel } from "./PhotoCarousel";
 import { CardExperience } from "./CardExperience";
 import { RecipientExperience } from "@/components/presentation/RecipientExperience";
+import { LetterSheet } from "@/components/letter/LetterSheet";
 
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 
@@ -379,14 +380,59 @@ describe("cartas publicadas pelos dois caminhos de renderização", () => {
       expect(shown()).toBe(2);
     });
 
-    it("prévia do editor (preview): fotos paradas, sem timer do carrossel", () => {
+    it("\"Ver como vai abrir\" (preview): fechado não conta tempo; depois do clique, as fotos passam sozinhas", () => {
       mount(experience(true));
-      const before = vi.getTimerCount();
+      const sheet = container.querySelector<HTMLElement>(".ps-open")!;
+      reportIntersecting(false, sheet); // folha escondida = fora da tela
+      tick(INTERVAL * 3);
+      expect(shown(sheet)).toBe(0);
+
       act(() => container.querySelector<HTMLButtonElement>(".ps-stage__hit")!.click());
       tick(1900);
-      tick(INTERVAL * 3);
+      reportIntersecting(true, sheet);
+      expect(shown(sheet)).toBe(0); // começa pela primeira
+      tick(INTERVAL);
+      expect(shown(sheet)).toBe(1);
+      tick(INTERVAL);
+      expect(shown(sheet)).toBe(2);
+      tick(INTERVAL);
+      expect(shown(sheet)).toBe(0);
+    });
+
+    it("preview: setas manuais seguem valendo e o autoplay continua depois delas", () => {
+      mount(experience(true));
+      act(() => container.querySelector<HTMLButtonElement>(".ps-stage__hit")!.click());
+      tick(1900);
+      click("Próxima foto");
+      expect(shown()).toBe(1);
+      tick(INTERVAL);
+      expect(shown()).toBe(2);
+    });
+
+    it("preview: desmontar (fechar a demonstração) não deixa timer do carrossel", () => {
+      mount(experience(true));
+      act(() => container.querySelector<HTMLButtonElement>(".ps-stage__hit")!.click());
+      tick(1900);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      act(() => root.render(<div />));
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe("prévia inline do editor (LetterSheet em preview)", () => {
+    const preset = getPreset("romantico");
+    const letter = { ...demoCart(), music: null };
+
+    it("fotos paradas, sem timer, e navegação manual continua funcionando", () => {
+      mount(<LetterSheet letter={letter} theme={preset.letter} preview />);
+      const before = vi.getTimerCount();
+      tick(INTERVAL * 4);
       expect(shown()).toBe(0);
       expect(vi.getTimerCount()).toBeLessThanOrEqual(before);
+      click("Próxima foto");
+      expect(shown()).toBe(1);
+      tick(INTERVAL * 4);
+      expect(shown()).toBe(1);
     });
   });
 });
