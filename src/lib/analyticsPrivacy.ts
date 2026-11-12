@@ -22,6 +22,8 @@ const PRIVATE_PATH_RULES: ReadonlyArray<{ pattern: RegExp; replacement: string }
   { pattern: /^\/c\/[^/]+/, replacement: "/c/[slug]" },
   { pattern: /^\/pedido\/[^/]+/, replacement: "/pedido/[orderId]" },
   { pattern: /^\/checkout\/[^/]+/, replacement: "/checkout/[cartId]" },
+  { pattern: /^\/presente\/[^/]+/, replacement: "/presente/[id]" },
+  { pattern: /^\/api\/letters\/[^/]+/, replacement: "/api/letters/[slug]" },
 ];
 
 /**

@@ -1,6 +1,7 @@
 import type { Cart, CartMedia, SelectedMusic } from "@/lib/types";
 import { clampFraming, type PhotoFraming } from "@/lib/photoFraming";
 import { youTubeWatchUrl } from "@/lib/youtube";
+import { parsePresentationOptions } from "@/content/presentation/presets";
 
 /**
  * Converte a linha do banco (campos de música achatados, datas Date) no
@@ -62,6 +63,11 @@ export interface DbCartRow {
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Colunas da 2.0. Opcionais no tipo: linhas lidas por consultas antigas não as trazem. */
+  presentation?: string | null;
+  presentationOptions?: unknown;
+  publicId?: string | null;
+  sharePreviewVersion?: number | null;
   media: DbMediaRow[];
 }
 
@@ -116,6 +122,12 @@ export function dbToDomainCart(row: DbCartRow, options: DomainCartOptions = {}):
     relationshipStartDate: row.relationshipStartDate?.toISOString() ?? null,
     showRelationshipCounter: row.showRelationshipCounter,
     planType: (row.planType as Cart["planType"]) ?? null,
+    // Id fora do registro continua não nulo: quem decide o fallback é
+    // `resolveExperience`, nunca a conversão (que não pode virar carta legada).
+    presentation: (row.presentation ?? null) as Cart["presentation"],
+    presentationOptions: parsePresentationOptions(row.presentationOptions),
+    publicId: row.publicId ?? null,
+    sharePreviewVersion: row.sharePreviewVersion ?? null,
     media,
     expiresAt: row.expiresAt?.toISOString() ?? null,
     publishedAt: row.publishedAt?.toISOString() ?? null,

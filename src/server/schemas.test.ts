@@ -157,3 +157,29 @@ describe("draftUpdateSchema — versão do rascunho", () => {
     expect(draftUpdateSchema.safeParse({ clientUpdatedAt: "ontem" }).success).toBe(false);
   });
 });
+
+describe("draftUpdateSchema — estilos 2.0", () => {
+  it("aceita estilo conhecido e opções versionadas; recusa o resto", async () => {
+    const { draftUpdateSchema } = await import("@/server/schemas");
+    expect(draftUpdateSchema.safeParse({ presentation: "romantico" }).success).toBe(true);
+    expect(draftUpdateSchema.safeParse({ presentation: "desconhecido" }).success).toBe(false);
+    expect(draftUpdateSchema.safeParse({ presentation: null }).success).toBe(false);
+    expect(draftUpdateSchema.safeParse({ presentationOptions: { v: 1, effect: "brilho" } }).success).toBe(true);
+    expect(draftUpdateSchema.safeParse({ presentationOptions: null }).success).toBe(true);
+    expect(draftUpdateSchema.safeParse({ presentationOptions: { v: 2, effect: "brilho" } }).success).toBe(false);
+    expect(draftUpdateSchema.safeParse({ presentationOptions: { v: 1, effect: "fogos" } }).success).toBe(false);
+    expect(draftUpdateSchema.safeParse({ presentationOptions: { v: 1, cor: "#fff" } }).success).toBe(false);
+  });
+
+  it("o aviso da prévia só pode ser marcado (1), nunca outro valor", async () => {
+    const { draftUpdateSchema } = await import("@/server/schemas");
+    expect(draftUpdateSchema.safeParse({ sharePreviewVersion: 1 }).success).toBe(true);
+    expect(draftUpdateSchema.safeParse({ sharePreviewVersion: 2 }).success).toBe(false);
+    expect(draftUpdateSchema.safeParse({ sharePreviewVersion: null }).success).toBe(false);
+  });
+
+  it("publicId nunca vem do cliente", async () => {
+    const { draftUpdateSchema } = await import("@/server/schemas");
+    expect(draftUpdateSchema.safeParse({ publicId: "abcdefghijkmnpqrstuvwxyz23" }).success).toBe(false);
+  });
+});

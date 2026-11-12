@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Cart } from "@/lib/types";
 import { getTheme } from "@/content/themes";
 import { CardPreview } from "@/components/card/CardPreview";
@@ -9,7 +9,6 @@ import { CardCreateSeal } from "@/components/card/CardCreateSeal";
 import { CardMusicBadge } from "@/components/card/CardMusicBadge";
 import { CardFloatingActions } from "@/components/card/CardFloatingActions";
 import { youTubeEmbedUrl } from "@/lib/youtube";
-import { whatsappShareUrl } from "@/lib/whatsapp";
 import type { SelectedMusic } from "@/lib/types";
 import { track } from "@/lib/analytics";
 
@@ -18,7 +17,7 @@ import { track } from "@/lib/analytics";
  * Começa com o envelope fechado e revela a carta após a interação.
  * A música só é montada (e só tenta tocar) após a abertura do envelope.
  */
-export function CardExperience({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
+export function CardExperience({ cart, share }: { cart: Cart; share: ReactNode }) {
   const [opened, setOpened] = useState(false);
   const theme = getTheme(cart.theme);
   const recipient = cart.recipientName.trim();
@@ -41,7 +40,7 @@ export function CardExperience({ cart, shareUrl }: { cart: Cart; shareUrl: strin
           onOpen={handleOpen}
         />
       ) : (
-        <OpenedLetter cart={cart} shareUrl={shareUrl} />
+        <OpenedLetter cart={cart} share={share} />
       )}
 
       {/* Filho DIRETO da raiz — nunca dentro dos blocos acima — para que
@@ -138,8 +137,7 @@ function ClosedEnvelope({
   );
 }
 
-function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
-  const shareText = `Preparei uma cartinha especial para você 💌 ${shareUrl}`;
+function OpenedLetter({ cart, share }: { cart: Cart; share: ReactNode }) {
   // Derivado aqui (em vez de descer por prop) pelo mesmo motivo que
   // `CardPreview` faz: `getTheme` é uma busca pura em uma lista de quatro.
   const theme = getTheme(cart.theme);
@@ -150,17 +148,11 @@ function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
 
       {cart.music && <OpenCardMusic music={cart.music} />}
 
-      <div className="mt-5 flex flex-col gap-2">
-        <a
-          href={whatsappShareUrl(shareText)}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={() => track("whatsapp_share_clicked", { from: "card" })}
-          className="rounded-full bg-[#25D366] px-6 py-3 text-center text-sm font-semibold text-white shadow-lg transition hover:brightness-105"
-        >
-          Compartilhar no WhatsApp
-        </a>
-      </div>
+      {/* Compartilhar mostra SÓ a prévia pública (/presente/). O botão antigo
+          enviava este link — a carta inteira — com o texto "Preparei uma
+          cartinha especial para você", e quem queria mostrar que ganhou acabava
+          entregando a mensagem (relatório de 2026-11-03, achado 1). */}
+      <div className="mt-5 flex flex-col gap-2">{share}</div>
 
       {/* Fora do contêiner de ações acima: compartilhar é para quem RECEBEU a
           cartinha, criar é para quem só passou por ela. Ações diferentes, com
@@ -170,7 +162,7 @@ function OpenedLetter({ cart, shareUrl }: { cart: Cart; shareUrl: string }) {
   );
 }
 
-function OpenCardMusic({ music }: { music: SelectedMusic }) {
+export function OpenCardMusic({ music }: { music: SelectedMusic }) {
   // Tenta tocar logo após a abertura (dentro do gesto do usuário). Se o
   // navegador bloquear, o próprio player mostra o botão de play e o controle
   // abaixo permite reiniciar — sem gerar erro visual.

@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Cart, CartMedia, ThemeId } from "@/lib/types";
-import { themes } from "@/content/themes";
+import type { Cart, CartMedia } from "@/lib/types";
 import {
   MAX_CART_PHOTOS,
   createPhotoReader,
@@ -26,9 +25,8 @@ import {
 import { framingStyle, type PhotoFraming } from "@/lib/photoFraming";
 import type { CartSession } from "@/lib/cartSession";
 import { track } from "@/lib/analytics";
-import { MusicPicker } from "./MusicPicker";
 import { PhotoFramingDialog } from "./PhotoFramingDialog";
-import { FieldLabel, StepHeader, Toggle } from "./ui";
+import { FieldLabel, Toggle } from "./ui";
 
 interface Props {
   cart: Cart;
@@ -49,34 +47,6 @@ interface Props {
 export interface UploadStatus {
   inFlight: number;
   failed: number;
-}
-
-export function StepPersonalize({
-  cart,
-  update,
-  session,
-  onMediaChanged,
-  onUploadStatus,
-}: Props) {
-  return (
-    <div>
-      <StepHeader
-        title="Personalize a cartinha"
-        subtitle="Tudo opcional — adicione o que quiser e siga em frente quando estiver pronto."
-      />
-      <div className="space-y-7">
-        <PhotosField
-          cart={cart}
-          session={session}
-          onMediaChanged={onMediaChanged}
-          onUploadStatus={onUploadStatus}
-        />
-        <CounterField cart={cart} update={update} />
-        <MusicPicker cart={cart} update={update} />
-        <ThemeField cart={cart} update={update} />
-      </div>
-    </div>
-  );
 }
 
 function apiErrorMessage(err: unknown, fallback: string): string {
@@ -149,7 +119,7 @@ interface UploadJob {
   status: PendingStatus;
 }
 
-function PhotosField({
+export function PhotosField({
   cart,
   session,
   onMediaChanged,
@@ -658,7 +628,7 @@ function PhotosField({
   );
 }
 
-function CounterField({ cart, update }: Pick<Props, "cart" | "update">) {
+export function CounterField({ cart, update }: Pick<Props, "cart" | "update">) {
   return (
     <div className="space-y-3">
       <Toggle
@@ -684,41 +654,6 @@ function CounterField({ cart, update }: Pick<Props, "cart" | "update">) {
           />
         </div>
       )}
-    </div>
-  );
-}
-
-function ThemeField({ cart, update }: Pick<Props, "cart" | "update">) {
-  return (
-    <div>
-      <FieldLabel>Tema visual</FieldLabel>
-      <div className="grid grid-cols-2 gap-2.5">
-        {themes.map((t) => {
-          const active = cart.theme === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => update({ theme: t.id as ThemeId })}
-              aria-pressed={active}
-              className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition ${
-                active
-                  ? "border-vinho bg-vinho/5 shadow-sm"
-                  : "border-rosa/35 bg-white hover:border-vinho/40"
-              }`}
-            >
-              <span className="flex shrink-0 gap-0.5">
-                <span className="h-8 w-4 rounded-l" style={{ background: t.swatch[0] }} />
-                <span className="h-8 w-4 rounded-r" style={{ background: t.swatch[1] }} />
-              </span>
-              <span>
-                <span className="block text-sm font-medium text-grafite">{t.label}</span>
-                <span className="block text-xs text-grafite/50">{t.description}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

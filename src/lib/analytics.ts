@@ -33,6 +33,14 @@ export type AnalyticsEvent =
   | "letter_published"
   | "cart_opened"
   | "whatsapp_share_clicked"
+  /** Folha "Compartilhar que ganhei" aberta na carta (o link é sempre a prévia /presente/). */
+  | "gift_share_opened"
+  /** Prévia pública enviada (`method`: native, whatsapp, copy). */
+  | "gift_share_sent"
+  /** Estilo escolhido no editor 2.0. */
+  | "style_selected"
+  /** "Começar outra" na faixa de retomada do editor 2.0. */
+  | "draft_restarted"
   /** Clique no convite "criar a minha" dentro da cartinha pública (`/c/[slug]`). */
   | "create_cta_from_card_clicked"
   /** Clique no indicador de música (cartinha aberta) — atalho de rolagem até o player. */

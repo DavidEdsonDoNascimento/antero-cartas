@@ -33,6 +33,10 @@ export const faq: FaqItem[] = [
   },
   {
     q: "A cartinha é privada?",
-    a: "Sim. O link é longo e difícil de adivinhar, as cartinhas não aparecem em buscas e não existe galeria pública. Só quem tem o link consegue abrir.",
+    a: "O link da cartinha é longo e difícil de adivinhar, as cartinhas não aparecem em buscas e não existe galeria pública. Quem tem esse link consegue abrir a carta inteira: se ele for encaminhado, a outra pessoa também vai conseguir ler.",
+  },
+  {
+    q: "O que aparece quando a pessoa compartilha que ganhou?",
+    a: "Quem recebe pode tocar em “Compartilhar que ganhei”. Isso envia um outro link, de prévia, que mostra o cenário, a primeira foto, o primeiro nome de quem recebeu e um pequeno trecho do começo da mensagem. O resto da carta, as outras fotos e a assinatura não aparecem, e a prévia não abre a carta. Esse link deixa de funcionar quando a cartinha expira, mas aplicativos como o WhatsApp podem guardar a imagem e o texto da prévia por conta própria.",
   },
 ];

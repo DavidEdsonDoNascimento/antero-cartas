@@ -114,3 +114,12 @@ describe("sanitizeAnalyticsProps", () => {
     expect(isSafeAnalyticsKey("shareUrl")).toBe(false);
   });
 });
+
+describe("sanitizeAnalyticsUrl — prévia pública (2.0)", () => {
+  it("mascara o identificador de /presente/ e da foto pública", () => {
+    expect(sanitizeAnalyticsUrl(`${ORIGIN}/presente/abcdefghijkmnpqrstuvwxyz23`)).toBe(`${ORIGIN}/presente/[id]`);
+    expect(sanitizeAnalyticsUrl(`${ORIGIN}/presente/abcdefghijkmnpqrstuvwxyz23/foto`)).toBe(
+      `${ORIGIN}/presente/[id]/foto`,
+    );
+  });
+});

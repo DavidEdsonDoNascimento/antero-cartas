@@ -122,10 +122,21 @@ export async function createOrder(
   const provider = getPaymentProvider();
 
   const order = await prisma.$transaction(async (tx) => {
-    await tx.cart.update({
-      where: { id: cart.id },
+    // Condicional na versão lida acima: o conteúdo conferido em `contentOk` é
+    // exatamente o que fica com a cobrança aberta. Sem isso, um autosave entre a
+    // leitura e esta escrita poderia esvaziar a mensagem de um pedido recém-criado
+    // (ver `keepsPublishable` em cartService.updateDraft).
+    const { count } = await tx.cart.updateMany({
+      where: {
+        id: cart.id,
+        updatedAt: cart.updatedAt,
+        status: { in: ["DRAFT", "AWAITING_PAYMENT"] },
+      },
       data: { planType: input.planType, status: "AWAITING_PAYMENT" },
     });
+    if (count === 0) {
+      throw new ApiError("conflict", "A cartinha mudou enquanto o pedido era criado. Tente de novo.");
+    }
     const created = await tx.order.create({
       data: {
         cartId: cart.id,

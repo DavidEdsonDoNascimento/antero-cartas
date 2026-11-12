@@ -83,6 +83,9 @@ export type CartPatch = Partial<{
   relationshipStartDate: string | null;
   showRelationshipCounter: boolean;
   planType: Cart["planType"];
+  presentation: Cart["presentation"];
+  presentationOptions: Cart["presentationOptions"];
+  sharePreviewVersion: 1;
 }>;
 
 export function createDraft(initial?: CartPatch): Promise<{ cart: Cart; editToken: string }> {

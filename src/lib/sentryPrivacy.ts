@@ -37,6 +37,8 @@ const PRIVATE_PATH_RULES: ReadonlyArray<{ pattern: RegExp; replacement: string }
   { pattern: /\/checkout\/[^/?#]+/g, replacement: "/checkout/[cartId]" },
   { pattern: /\/api\/carts\/[^/?#]+/g, replacement: "/api/carts/[id]" },
   { pattern: /\/api\/orders\/[^/?#]+/g, replacement: "/api/orders/[id]" },
+  { pattern: /\/presente\/[^/?#]+/g, replacement: "/presente/[id]" },
+  { pattern: /\/api\/letters\/[^/?#]+/g, replacement: "/api/letters/[slug]" },
 ];
 
 const EMAIL_RE = /[\w.+-]+@[\w-]+\.[\w.-]+/g;

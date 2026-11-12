@@ -48,6 +48,7 @@ const {
   prefetchCartInit,
   resetCartInitPrefetch,
   buildPatch,
+  withDefaultStyle,
 } = await import("./draftInit");
 const { ApiClientError, RequestTimeoutError } = await import("@/lib/api");
 
@@ -68,6 +69,10 @@ function makeCart(overrides: Partial<Cart> = {}): Cart {
     relationshipStartDate: null,
     showRelationshipCounter: false,
     planType: null,
+    presentation: null,
+    presentationOptions: null,
+    publicId: null,
+    sharePreviewVersion: null,
     media: [],
     expiresAt: null,
     publishedAt: null,
@@ -126,7 +131,7 @@ describe("resolveCartInit", () => {
       expect(outcome.cart.recipientType).toBeNull();
       expect(outcome.cart.title).toBe("");
     }
-    expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(undefined));
   });
 
   it.each([
@@ -167,7 +172,7 @@ describe("resolveCartInit", () => {
     const outcome = await resolveCartInit();
 
     expect(mockLoadUnsynced).toHaveBeenCalledWith("cart_1");
-    expect(mockCreateDraft).toHaveBeenCalledWith(unsynced);
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(unsynced));
     expect(mockSaveSession).toHaveBeenCalledWith({ cartId: "cart_2", editToken: "tok2" });
     expect(mockClearDraft).toHaveBeenCalled();
     expect(outcome).toMatchObject({ kind: "create", cart: created, recovered: true });
@@ -194,7 +199,7 @@ describe("resolveCartInit", () => {
 
     await resolveCartInit();
 
-    expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(undefined));
   });
 
   it("também descarta a sessão quando o token é inválido (fetchCart falha)", async () => {
@@ -222,7 +227,7 @@ describe("resolveCartInit", () => {
       session: { cartId: fresh.id, editToken: "tok3" },
       legacyMedia: [],
     });
-    expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(undefined));
     expect(mockSaveSession).toHaveBeenCalledWith({ cartId: fresh.id, editToken: "tok3" });
   });
 
@@ -247,7 +252,7 @@ describe("resolveCartInit", () => {
     const outcome = await resolveCartInit();
 
     expect(mockClearDraft).toHaveBeenCalled();
-    expect(mockCreateDraft).toHaveBeenCalledWith(undefined);
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(undefined));
     expect(outcome.kind).toBe("create");
     if (outcome.kind === "create") {
       expect(outcome.legacyMedia).toEqual([]);
@@ -264,7 +269,7 @@ describe("resolveCartInit", () => {
 
     const outcome = await resolveCartInit();
 
-    expect(mockCreateDraft).toHaveBeenCalledWith(buildPatch(legacy));
+    expect(mockCreateDraft).toHaveBeenCalledWith(withDefaultStyle(buildPatch(legacy)));
     expect(outcome.kind).toBe("create");
   });
 });

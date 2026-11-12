@@ -84,6 +84,22 @@ model Cart {
   expiresAt   DateTime?
   publishedAt DateTime?
 
+  /// Estilo de apresentação (Antero Cartas 2.0): id imutável de
+  /// `src/content/presentation/presets.ts`. NULL = carta legada, aberta pelo
+  /// renderizador antigo com o tema de `theme` — nunca é preenchido sozinho.
+  presentation        String?
+  /// Opções do estilo, versionadas: `{ "v": 1, "effect": "petalas" | … }`.
+  /// Validadas no servidor contra os efeitos permitidos pelo estilo.
+  presentationOptions Json?
+  /// Identificador da prévia pública `/presente/{publicId}`. Sorteado com
+  /// CSPRNG (≈131 bits), independente de `slug` e de `id`. Gerado na mesma
+  /// escrita da publicação; cartas publicadas antes ganham o seu sob demanda.
+  publicId            String?  @unique
+  /// Versão da regra de prévia pública aceita por quem criou: 1 = viu o aviso
+  /// de que a primeira foto e o começo da mensagem aparecem em `/presente/`.
+  /// NULL (todas as cartas anteriores) = prévia genérica, sem conteúdo real.
+  sharePreviewVersion Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -38,6 +38,10 @@ export function demoCart(): Cart {
     relationshipStartDate: new Date(Date.now() - 1000 * 60 * 60 * 24 * 862).toISOString(),
     showRelationshipCounter: true,
     planType: "PERMANENT",
+    presentation: null,
+    presentationOptions: null,
+    publicId: null,
+    sharePreviewVersion: null,
     media: [
       demoPhoto("1", "#681d35", "#d98c9f", "💗", 0),
       demoPhoto("2", "#c6a15b", "#fff9f4", "🌅", 1),

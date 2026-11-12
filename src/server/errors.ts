@@ -9,6 +9,7 @@ export type ApiErrorCode =
   | "conflict"
   | "forbidden_state"
   | "limit_reached"
+  | "pending_payment_incomplete"
   | "mock_disabled"
   | "rate_limited"
   | "maintenance"
@@ -21,6 +22,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   conflict: 409,
   forbidden_state: 409,
   limit_reached: 409,
+  pending_payment_incomplete: 422,
   mock_disabled: 403,
   rate_limited: 429,
   maintenance: 503,

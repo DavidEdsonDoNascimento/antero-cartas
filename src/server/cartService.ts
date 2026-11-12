@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
 
 /** Cliente Prisma ou cliente de transação — mesma API para os dois. */
 type Db = typeof prisma | Prisma.TransactionClient;
@@ -16,6 +16,7 @@ import { ApiError } from "@/server/errors";
 import type { DraftUpdateInput } from "@/server/schemas";
 import { clampFraming, type PhotoFraming } from "@/lib/photoFraming";
 import type { Cart, PlanType } from "@/lib/types";
+import { getPreset, isPresentationId } from "@/content/presentation/presets";
 
 const EDITABLE_STATUSES = new Set(["DRAFT", "AWAITING_PAYMENT"]);
 const cartInclude = { media: { orderBy: { position: "asc" as const } } };
@@ -70,6 +71,15 @@ export async function updateDraft(
 ): Promise<Cart> {
   const row = await loadRowWithToken(cartId, token);
   requireEditable(row.status);
+  assertEffectAllowed(row, input);
+
+  // Com uma cobrança aberta (AWAITING_PAYMENT) a carta continua editável, mas
+  // não pode deixar de ser publicável: a publicação roda dentro da confirmação
+  // do pagamento e, se a carta estiver incompleta, um pagamento aprovado fica
+  // sem carta (risco registrado na entrega 1.1). Uma alteração que a deixaria
+  // incompleta só é gravada em DRAFT — e a condição vai na própria escrita, para
+  // não haver janela entre a leitura e a criação do pedido.
+  const statuses = keepsPublishable(row, input) ? EDITABLE : DRAFT_ONLY;
 
   // Com a versão informada, a escrita é condicional na própria consulta: um
   // envio atrasado, baseado numa versão que já passou, não sobrescreve um texto
@@ -81,7 +91,7 @@ export async function updateDraft(
       where: {
         id: cartId,
         updatedAt: base,
-        status: { in: ["DRAFT", "AWAITING_PAYMENT"] },
+        status: { in: [...statuses] },
       },
       // A versão sempre anda: com o relógio da instância igual ou atrás da base
       // (mesmo milissegundo, relógios divergentes), ela se repetiria e um envio
@@ -89,7 +99,7 @@ export async function updateDraft(
       data: { ...buildUpdateData(input), updatedAt: version },
     });
     if (count === 0) {
-      requireEditable((await loadRow(cartId)).status);
+      await explainRefusedWrite(cartId, input);
       throw new ApiError("conflict", "A cartinha mudou desde o último salvamento.");
     }
     // A versão desta escrita, não a da releitura: se outra instância gravou nesse
@@ -97,12 +107,51 @@ export async function updateDraft(
     return { ...toDomainCart(await loadRow(cartId)), updatedAt: version.toISOString() };
   }
 
-  const updated = await prisma.cart.update({
-    where: { id: cartId },
+  const { count } = await prisma.cart.updateMany({
+    where: { id: cartId, status: { in: [...statuses] } },
     data: buildUpdateData(input),
-    include: cartInclude,
   });
-  return toDomainCart(updated as unknown as DbCartRow);
+  if (count === 0) {
+    await explainRefusedWrite(cartId, input);
+    throw new ApiError("conflict", "A cartinha mudou desde o último salvamento.");
+  }
+  return toDomainCart(await loadRow(cartId));
+}
+
+const EDITABLE = ["DRAFT", "AWAITING_PAYMENT"] as const;
+const DRAFT_ONLY = ["DRAFT"] as const;
+
+/** Mesmos requisitos de conteúdo de `assertPublishable`, sobre a carta depois do patch. */
+function keepsPublishable(row: DbCartRow, input: DraftUpdateInput): boolean {
+  const title = input.title ?? row.title;
+  const message = input.message ?? row.message;
+  const recipientType = "recipientType" in input ? input.recipientType : row.recipientType;
+  return Boolean(title.trim() && message.trim() && recipientType);
+}
+
+/** Por que a escrita condicional não pegou nenhuma linha: estado, pagamento ou versão. */
+async function explainRefusedWrite(cartId: string, input: DraftUpdateInput): Promise<void> {
+  const current = await loadRow(cartId);
+  requireEditable(current.status);
+  if (current.status === "AWAITING_PAYMENT" && !keepsPublishable(current, input)) {
+    throw new ApiError(
+      "pending_payment_incomplete",
+      "Com o pagamento em andamento, a cartinha precisa continuar com a mensagem. Escreva algo antes de sair.",
+    );
+  }
+}
+
+/** O efeito escolhido precisa ser permitido pelo estilo que a carta terá depois do patch. */
+function assertEffectAllowed(row: DbCartRow, input: DraftUpdateInput): void {
+  const effect = input.presentationOptions?.effect;
+  if (!effect || effect === "none") return;
+  const presentation = input.presentation ?? row.presentation ?? null;
+  if (!presentation || !isPresentationId(presentation)) {
+    throw new ApiError("invalid", "Escolha um estilo antes de escolher o efeito.");
+  }
+  if (!getPreset(presentation).effects.allowed.includes(effect)) {
+    throw new ApiError("invalid", "Este efeito não está disponível para o estilo escolhido.");
+  }
 }
 
 /** Monta o objeto de atualização apenas com as chaves realmente enviadas. */
@@ -119,9 +168,15 @@ function buildUpdateData(input: DraftUpdateInput): Record<string, unknown> {
     "theme",
     "showRelationshipCounter",
     "planType",
+    "presentation",
+    "sharePreviewVersion",
   ] as const;
   for (const key of simple) {
     if (key in input) data[key] = input[key];
+  }
+  if ("presentationOptions" in input) {
+    // JSON nulo do Prisma: `null` limpa as opções e o estilo volta ao efeito padrão.
+    data.presentationOptions = input.presentationOptions ?? Prisma.DbNull;
   }
   if ("relationshipStartDate" in input) {
     data.relationshipStartDate = input.relationshipStartDate
@@ -356,6 +411,20 @@ async function uniqueSlug(db: Db): Promise<string> {
 }
 
 /**
+ * Identificador da prévia pública. Mesmo gerador do slug (CSPRNG, ≈130 bits),
+ * mas sorteio próprio: não deriva do slug nem do `id`, então conhecer a prévia
+ * não leva à carta.
+ */
+async function uniquePublicId(db: Db): Promise<string> {
+  for (let i = 0; i < 5; i++) {
+    const publicId = generateSlug();
+    const exists = await db.cart.findUnique({ where: { publicId }, select: { id: true } });
+    if (!exists) return publicId;
+  }
+  throw new ApiError("server", "Não foi possível gerar um link único.");
+}
+
+/**
  * Publica a carta (idempotente). Chamada dentro da transação de confirmação
  * de pagamento (orderService), recebendo `tx` para que pedido+publicação
  * sejam atômicos. Aceita também o client normal fora de transação.
@@ -385,11 +454,15 @@ export async function publishCartWithClient(
   assertPublishable(row);
 
   const slug = row.slug ?? (await uniqueSlug(db));
+  // Na mesma escrita do slug: toda carta publicada daqui em diante nasce com os
+  // dois links. Publicação repetida cai no retorno idempotente acima e nunca
+  // troca nenhum dos dois.
+  const publicId = row.publicId ?? (await uniquePublicId(db));
   const expiresAt = computeExpiresAt(planType, paidAt);
 
   await db.cart.update({
     where: { id: cartId },
-    data: { status: "PUBLISHED", slug, publishedAt: paidAt, expiresAt, planType },
+    data: { status: "PUBLISHED", slug, publicId, publishedAt: paidAt, expiresAt, planType },
   });
   return (await db.cart.findUnique({
     where: { id: cartId },
@@ -432,7 +505,7 @@ export type PublicCartResult =
  * abaixo não encontra nada e o acesso é preservado, de propósito: não há
  * pagamento nenhum para revogar.
  */
-async function findReversedOrderStatus(cartId: string): Promise<"REFUNDED" | "CHARGED_BACK" | null> {
+export async function findReversedOrderStatus(cartId: string): Promise<"REFUNDED" | "CHARGED_BACK" | null> {
   const order = await prisma.order.findFirst({
     where: { cartId, status: { in: ["PAID", "REFUNDED", "CHARGED_BACK"] } },
     orderBy: { paidAt: "desc" },

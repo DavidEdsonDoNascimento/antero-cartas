@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { LIMITS } from "@/lib/limits";
 import { MAX_ZOOM, MIN_ZOOM } from "@/lib/photoFraming";
+import { EFFECT_IDS, PRESENTATION_IDS } from "@/content/presentation/presets";
 
 /** Validação central do servidor. Não confiar apenas no cliente. */
 
@@ -18,6 +19,17 @@ export const recipientTypeEnum = z.enum([
 
 export const themeEnum = z.enum(["romantico", "elegante", "delicado", "celebracao"]);
 export const planEnum = z.enum(["LIMITED", "PERMANENT"]);
+export const presentationEnum = z.enum(PRESENTATION_IDS);
+
+/**
+ * Opções do estilo, versionadas. `.strict()`: nada além de `v` e `effect`. A
+ * checagem de que o efeito é permitido PELO ESTILO da carta fica no serviço
+ * (`cartService.updateDraft`), porque depende do estilo já gravado.
+ */
+export const presentationOptionsSchema = z
+  .object({ v: z.literal(1), effect: z.enum(EFFECT_IDS).optional() })
+  .strict()
+  .nullable();
 
 export const musicSchema = z
   .object({
@@ -45,6 +57,10 @@ export const draftUpdateSchema = z
     relationshipStartDate: z.string().datetime().nullable(),
     showRelationshipCounter: z.boolean(),
     planType: planEnum.nullable(),
+    presentation: presentationEnum,
+    presentationOptions: presentationOptionsSchema,
+    /** Só pode ser marcada (1): quem criou viu o aviso da prévia pública. */
+    sharePreviewVersion: z.literal(1),
     /** updatedAt conhecido pelo cliente, para proteção contra corrida. */
     clientUpdatedAt: z.string().datetime().optional(),
   })

@@ -6,7 +6,8 @@ import type { ThemeId } from "@/lib/types";
  * borda da carta, ornamento e detalhes do envelope.
  */
 export interface ThemeConfig {
-  id: ThemeId;
+  /** Tema legado (`ThemeId`) ou papel v2 de um estilo (`content/presentation`). */
+  id: string;
   label: string;
   description: string;
 
@@ -56,7 +57,10 @@ export interface ThemeConfig {
   seal: string;
 }
 
-export const themes: ThemeConfig[] = [
+/** Os quatro temas legados: o id é sempre um `ThemeId`. */
+export type LegacyThemeConfig = ThemeConfig & { id: ThemeId };
+
+export const themes: LegacyThemeConfig[] = [
   {
     id: "romantico",
     label: "Romântico",

@@ -100,7 +100,12 @@ function isCartPatch(value: unknown): value is CartPatch {
     NULLABLE_STRING_FIELDS.every((key) => patch[key] === null || isText(key)) &&
     (patch.showRelationshipCounter === undefined ||
       typeof patch.showRelationshipCounter === "boolean") &&
-    (patch.music === undefined || patch.music === null || typeof patch.music === "object")
+    (patch.music === undefined || patch.music === null || typeof patch.music === "object") &&
+    (patch.presentation === undefined || typeof patch.presentation === "string") &&
+    (patch.presentationOptions === undefined ||
+      patch.presentationOptions === null ||
+      (typeof patch.presentationOptions === "object" && !Array.isArray(patch.presentationOptions))) &&
+    (patch.sharePreviewVersion === undefined || patch.sharePreviewVersion === 1)
   );
 }
 

@@ -14,6 +14,7 @@ import type { Cart } from "@/lib/types";
 import { loadSession, saveSession, clearSession, type CartSession } from "@/lib/cartSession";
 import { loadDraft, clearDraft, hasMeaningfulContent, loadUnsyncedChanges } from "@/lib/storage";
 import { ApiClientError, createDraft, fetchCart, type CartPatch } from "@/lib/api";
+import { DEFAULT_PRESENTATION, getPreset, presetForLegacyTheme } from "@/content/presentation/presets";
 
 const EDITABLE_STATUSES = new Set(["DRAFT", "AWAITING_PAYMENT"]);
 
@@ -39,7 +40,23 @@ export function buildPatch(cart: Cart): CartPatch {
     relationshipStartDate: cart.relationshipStartDate,
     showRelationshipCounter: cart.showRelationshipCounter,
     planType: cart.planType,
+    // Rascunhos do editor antigo não têm estilo: a chave só entra quando existe,
+    // para o autosave não gravar `presentation: null` (o schema não aceita nulo).
+    ...(cart.presentation ? { presentation: cart.presentation } : {}),
+    ...(cart.presentationOptions ? { presentationOptions: cart.presentationOptions } : {}),
+    ...(cart.sharePreviewVersion === 1 ? { sharePreviewVersion: 1 as const } : {}),
   };
+}
+
+/**
+ * Toda carta nova nasce com um estilo 2.0 (e o tema legado equivalente, para
+ * que um rollback a abra com aparência parecida). Rascunho migrado do cache
+ * antigo herda o estilo mais próximo do tema que já tinha.
+ */
+export function withDefaultStyle(patch?: CartPatch): CartPatch {
+  const presentation =
+    patch?.presentation ?? (patch?.theme ? presetForLegacyTheme(patch.theme) : DEFAULT_PRESENTATION);
+  return { ...(patch ?? {}), presentation, theme: patch?.theme ?? getPreset(presentation).legacyTheme };
 }
 
 export type CartInitOutcome =
@@ -79,7 +96,7 @@ export async function resolveCartInit(): Promise<CartInitOutcome> {
       // a próxima tentativa encontra tudo como estava.
       const unsynced = loadUnsyncedChanges(existing.cartId);
       if (unsynced) {
-        const { cart: created, editToken } = await createDraft(unsynced);
+        const { cart: created, editToken } = await createDraft(withDefaultStyle(unsynced));
         const session: CartSession = { cartId: created.id, editToken };
         saveSession(session);
         clearDraft();
@@ -98,7 +115,7 @@ export async function resolveCartInit(): Promise<CartInitOutcome> {
   const shouldMigrate = Boolean(legacy && hasMeaningfulContent(legacy));
   const initialPatch: CartPatch | undefined = shouldMigrate ? buildPatch(legacy!) : undefined;
 
-  const { cart: created, editToken } = await createDraft(initialPatch);
+  const { cart: created, editToken } = await createDraft(withDefaultStyle(initialPatch));
   const session: CartSession = { cartId: created.id, editToken };
   saveSession(session);
   return {

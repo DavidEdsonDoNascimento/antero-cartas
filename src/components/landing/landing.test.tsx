@@ -183,6 +183,9 @@ describe("isolamento das cartas e do app", () => {
     }
   });
 
+  // A apresentação 2.0 usa as mesmas famílias por `presentation/fonts` (sem
+  // preload, aplicadas só dentro da experiência nova): o preload da landing
+  // continua exclusivo dela.
   it("as fontes novas só são carregadas pela landing", () => {
     const users = ["src/app/page.tsx"];
     const forbidden = [

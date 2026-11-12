@@ -39,7 +39,28 @@ export default function PrivacidadePage() {
           <p>
             As cartinhas são acessíveis por um link privado, longo e difícil de adivinhar. Elas
             não são indexadas por mecanismos de busca, não aparecem em galerias públicas e não
-            expõem dados de outras cartinhas.
+            expõem dados de outras cartinhas. Quem tem o link consegue abrir a carta inteira, sem
+            senha: se o link for encaminhado, quem o receber também poderá lê-la.
+          </p>
+        </section>
+        <section>
+          <h2 className="mb-1 font-semibold text-grafite">3.1 Prévia de compartilhamento</h2>
+          <p>
+            Cada cartinha publicada também tem um link de prévia, separado do link da carta e que
+            não leva a ela. Ele só circula se alguém com o link da carta usar “Compartilhar que
+            ganhei”. A prévia mostra o cenário do estilo escolhido, a primeira foto, o primeiro
+            nome de quem recebe, um pequeno trecho do começo da mensagem (cortado no servidor) e
+            se a carta tem música. Não mostra o restante da mensagem, as outras fotos, a
+            assinatura nem o nome de quem enviou. A foto da prévia é gerada de novo, sem os dados
+            internos do arquivo (como a localização). Quem cria a carta é avisado disso antes do
+            pagamento. Cartinhas criadas antes desta regra mostram só o cenário e o envelope.
+          </p>
+          <p className="mt-2">
+            O link de prévia deixa de funcionar quando a cartinha expira ou o pagamento é
+            estornado, e não aparece em buscas. Não há opção para desativá-lo antes disso: quem
+            quiser retirá-lo pode falar com o suporte. Aplicativos e redes sociais (como o
+            WhatsApp) podem guardar a imagem e o texto da prévia em seus próprios servidores; essas
+            cópias não ficam sob nosso controle e não são apagadas quando a cartinha expira.
           </p>
         </section>
         <section>
