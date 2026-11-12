@@ -1,8 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CartMedia } from "@/lib/types";
 import { CARD_PHOTO_ASPECT, framingStyle } from "@/lib/photoFraming";
+
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+function subscribeReducedMotion(onChange: () => void) {
+  const mql = window.matchMedia?.(REDUCED_MOTION);
+  mql?.addEventListener?.("change", onChange);
+  return () => mql?.removeEventListener?.("change", onChange);
+}
+const getReducedMotion = () => window.matchMedia?.(REDUCED_MOTION).matches ?? false;
+
+function subscribeTabVisibility(onChange: () => void) {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+const getTabVisible = () => !document.hidden;
+
+/** Foco vindo do teclado (não de clique/toque, que em celular deixaria o autoplay parado). */
+function isKeyboardFocus(el: EventTarget): boolean {
+  try {
+    return (el as Element).matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Carrossel de fotos leve e acessível — sem dependências externas.
@@ -16,6 +40,14 @@ import { CARD_PHOTO_ASPECT, framingStyle } from "@/lib/photoFraming";
  *   vem de `framingStyle(m.framing)` — a MESMA função usada na prévia da
  *   jornada de criação e na miniatura da etapa Extras. Sem ajuste, o recorte
  *   é centralizado, exatamente como sempre foi.
+ * - Auto-avanço (`autoAdvance`): um `setTimeout` por foto, reagendado a cada
+ *   mudança de índice. Assim o clique manual (seta, indicador, swipe, teclado)
+ *   dá a próxima foto um intervalo inteiro depois — sem salto duplicado — e
+ *   re-renderizações do pai não reiniciam nada (as dependências são só valores
+ *   primitivos). Pausa por: aba oculta, carrossel fora da tela (a carta 2.0
+ *   monta a folha escondida até a abertura), movimento reduzido e foco por
+ *   teclado. Pausa por hover/toque foi removida de propósito: com o mouse
+ *   parado sobre a foto, ou depois de um toque, o autoplay nunca voltava.
  */
 export function PhotoCarousel({
   media,
@@ -33,26 +65,41 @@ export function PhotoCarousel({
   mutedColor: string;
   frame?: "tape" | "clean";
   tilt?: number;
-  /** Passa as fotos sozinho (usado na carta pronta e na demonstração). */
+  /** Passa as fotos sozinho (usado na carta publicada e na demonstração). */
   autoAdvance?: boolean;
   /** Intervalo do auto-avanço, em ms. */
   interval?: number;
 }) {
   const [index, setIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
+  // Foco por teclado dentro do carrossel: quem navega por teclado não perde a foto.
+  const [keyboardFocus, setKeyboardFocus] = useState(false);
+  // Fora da tela (ex.: folha `hidden` da carta 2.0 antes de abrir) não conta tempo.
+  const [onScreen, setOnScreen] = useState(true);
+  const groupRef = useRef<HTMLDivElement>(null);
   const startX = useRef<number | null>(null);
   const count = media.length;
+  const hasPhotos = count > 0;
+  const reducedMotion = useSyncExternalStore(subscribeReducedMotion, getReducedMotion, () => false);
+  const tabVisible = useSyncExternalStore(subscribeTabVisibility, getTabVisible, () => true);
 
-  // Auto-avanço: pausa ao interagir e respeita prefers-reduced-motion.
   useEffect(() => {
-    if (!autoAdvance || count <= 1 || paused) return;
-    const reduced =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) return;
-    const id = setInterval(() => setIndex((i) => (i + 1) % count), interval);
-    return () => clearInterval(id);
-  }, [autoAdvance, count, paused, interval]);
+    const node = groupRef.current;
+    if (!autoAdvance || !node || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([entry]) => setOnScreen(entry.isIntersecting));
+    io.observe(node);
+    return () => io.disconnect();
+  }, [autoAdvance, hasPhotos]);
+
+  const running =
+    autoAdvance && count > 1 && !reducedMotion && tabVisible && onScreen && !keyboardFocus;
+
+  // `index` entra nas dependências de propósito: cada troca (automática ou
+  // manual) agenda a próxima a partir de agora, com um único timer vivo.
+  useEffect(() => {
+    if (!running) return;
+    const id = setTimeout(() => setIndex((i) => (Math.min(i, count - 1) + 1) % count), interval);
+    return () => clearTimeout(id);
+  }, [running, index, count, interval]);
 
   if (count === 0) return null;
 
@@ -86,6 +133,7 @@ export function PhotoCarousel({
   return (
     <div className="w-full">
       <div
+        ref={groupRef}
         role="group"
         aria-roledescription="carrossel"
         aria-label={`Fotos da cartinha — ${count} no total`}
@@ -93,10 +141,10 @@ export function PhotoCarousel({
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
-        onPointerEnter={() => setPaused(true)}
-        onPointerLeave={() => setPaused(false)}
-        onFocus={() => setPaused(true)}
-        onBlur={() => setPaused(false)}
+        onFocus={(e) => setKeyboardFocus(isKeyboardFocus(e.target))}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setKeyboardFocus(false);
+        }}
         className="relative mx-auto w-full max-w-[16rem] touch-pan-y select-none rounded-md outline-none focus-visible:ring-2 focus-visible:ring-current"
       >
         <div
