@@ -157,7 +157,7 @@ export function CardPreview({ cart, live = false }: { cart: Cart; live?: boolean
   );
 }
 
-function useLiveCounter(startISO: string | null) {
+export function useLiveCounter(startISO: string | null) {
   const [, tick] = useState(0);
   useEffect(() => {
     if (!startISO) return;

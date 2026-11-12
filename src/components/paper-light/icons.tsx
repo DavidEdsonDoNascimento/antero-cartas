@@ -64,7 +64,7 @@ export function CardIcon(props: IconProps) {
 }
 
 /** Polígono serrilhado do lacre de cera: 13 lóbulos irregulares, calculado uma vez. */
-const SEAL_PATH = (() => {
+export const SEAL_PATH = (() => {
   const pts: string[] = [];
   const n = 156;
   for (let i = 0; i <= n; i++) {

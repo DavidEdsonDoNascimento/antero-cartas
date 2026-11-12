@@ -100,6 +100,8 @@ function definitiveMessage(err: unknown): string {
       return "Não encontramos esta cartinha neste navegador.";
     }
     if (err.code === "forbidden_state") return "Esta cartinha não pode mais ser editada.";
+    // Cobrança aberta e a alteração deixaria a carta sem mensagem: o servidor explica.
+    if (err.code === "pending_payment_incomplete") return err.message;
     if (err.status === 400) return "Algum dado da cartinha não foi aceito.";
   }
   return UNEXPECTED_MESSAGE;

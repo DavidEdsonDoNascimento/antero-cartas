@@ -73,6 +73,10 @@ function cartWith(media: CartMedia[]): Cart {
     relationshipStartDate: null,
     showRelationshipCounter: false,
     planType: "PERMANENT",
+    presentation: null,
+    presentationOptions: null,
+    publicId: null,
+    sharePreviewVersion: null,
     media,
     expiresAt: null,
     publishedAt: now,
@@ -98,7 +102,7 @@ function renderPreview(cart: Cart) {
 function renderPublicCard(cart: Cart) {
   act(() => {
     root = createRoot(container);
-    root.render(<CardExperience cart={cart} shareUrl="https://exemplo/c/abc" />);
+    root.render(<CardExperience cart={cart} share={null} />);
   });
   const open = Array.from(container.querySelectorAll("button")).find((b) =>
     (b.getAttribute("aria-label") ?? "").startsWith("Abrir"),

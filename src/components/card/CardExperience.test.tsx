@@ -9,7 +9,8 @@
  *
  * 1. O selo do estado fechado NÃO abre o envelope. Se clicar nele abrisse a
  *    carta, ele teria virado um segundo botão de abrir, disfarçado de link.
- * 2. O bloco final vem DEPOIS da ação de compartilhar e FORA do contêiner dela.
+ * 2. O bloco final vem DEPOIS da ação de compartilhar e FORA do contêiner dela,
+ *    e a carta não oferece mais o próprio link (privado) para compartilhar.
  * 3. Os flutuantes são filhos DIRETOS da raiz — nunca dentro do `.animate-fade-up`
  *    do `OpenedLetter`, cujas keyframes de `translateY` criariam containing block
  *    e prenderiam o `position: fixed`.
@@ -61,6 +62,10 @@ const CART: Cart = {
   relationshipStartDate: null,
   showRelationshipCounter: false,
   planType: "PERMANENT",
+  presentation: null,
+  presentationOptions: null,
+  publicId: null,
+  sharePreviewVersion: null,
   media: [],
   expiresAt: null,
   publishedAt: "2026-08-01T12:00:00.000Z",
@@ -68,7 +73,12 @@ const CART: Cart = {
   updatedAt: "2026-08-01T12:00:00.000Z",
 };
 
-const SHARE_URL = `https://exemplo.test/c/${SENTINELAS.slug}`;
+/** O slot de compartilhar (a página injeta o "Compartilhar que ganhei", que só leva a /presente/). */
+const SHARE = (
+  <button type="button" data-share-slot="true">
+    Compartilhar que ganhei
+  </button>
+);
 
 let container: HTMLDivElement;
 let root: Root;
@@ -87,7 +97,7 @@ afterEach(() => {
 function render(cart: Cart = CART) {
   act(() => {
     root = createRoot(container);
-    root.render(<CardExperience cart={cart} shareUrl={SHARE_URL} />);
+    root.render(<CardExperience cart={cart} share={SHARE} />);
   });
 }
 
@@ -158,6 +168,16 @@ describe("estado fechado", () => {
   });
 });
 
+describe("carta legada: indicador flutuante de música preservado", () => {
+  it("fechada, com música: continua mostrando o 'Com música' flutuante (a carta legada não tem o selo novo)", () => {
+    render();
+    const badge = container.querySelector('[role="img"][aria-label="Esta cartinha tem música"]');
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toContain("Com música");
+    expect(container.textContent).not.toContain("Uma música especial");
+  });
+});
+
 describe("estado aberto", () => {
   beforeEach(() => {
     render();
@@ -173,16 +193,16 @@ describe("estado aberto", () => {
     );
   });
 
-  it("o bloco final fica DEPOIS da ação de compartilhar no WhatsApp", () => {
-    const whatsapp = container.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
-    expect(whatsapp).not.toBeNull();
-    const posicao = whatsapp!.compareDocumentPosition(finalBlock()!);
+  const shareSlot = () => container.querySelector<HTMLElement>('[data-share-slot="true"]');
+
+  it("o bloco final fica DEPOIS da ação de compartilhar", () => {
+    expect(shareSlot()).not.toBeNull();
+    const posicao = shareSlot()!.compareDocumentPosition(finalBlock()!);
     expect(posicao & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("o bloco final fica FORA do contêiner de ações do WhatsApp", () => {
-    const whatsapp = container.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
-    expect(whatsapp!.parentElement!.contains(finalBlock())).toBe(false);
+  it("o bloco final fica FORA do contêiner de ações de compartilhar", () => {
+    expect(shareSlot()!.parentElement!.contains(finalBlock())).toBe(false);
   });
 
   it("o bloco final não flutua: nenhum elemento dele é fixed/absolute/sticky", () => {
@@ -209,9 +229,11 @@ describe("estado aberto", () => {
     expect(musicLink!.closest(".animate-fade-up")).toBeNull();
   });
 
-  it("o botão de compartilhar continua intacto (não houve regressão)", () => {
-    const whatsapp = container.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
-    expect(whatsapp!.textContent).toBe("Compartilhar no WhatsApp");
+  it("a carta não oferece mais o próprio link para compartilhar (o botão antigo saiu)", () => {
+    expect(container.querySelector('a[href*="wa.me"]')).toBeNull();
+    expect(container.textContent).not.toContain("Compartilhar no WhatsApp");
+    expect(container.innerHTML).not.toContain(SENTINELAS.slug);
+    expect(shareSlot()!.textContent).toBe("Compartilhar que ganhei");
   });
 });
 

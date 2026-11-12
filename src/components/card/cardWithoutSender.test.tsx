@@ -37,6 +37,10 @@ function cart(overrides: Partial<Cart> = {}): Cart {
     relationshipStartDate: null,
     showRelationshipCounter: false,
     planType: "LIMITED",
+    presentation: null,
+    presentationOptions: null,
+    publicId: null,
+    sharePreviewVersion: null,
     media: [],
     expiresAt: null,
     publishedAt: now,
@@ -63,7 +67,7 @@ afterEach(() => {
 function renderOpened(c: Cart) {
   act(() => {
     root = createRoot(container);
-    root.render(<CardExperience cart={c} shareUrl={`https://exemplo.test/c/${c.slug}`} />);
+    root.render(<CardExperience cart={c} share={null} />);
   });
   const open = Array.from(container.querySelectorAll("button")).find((b) =>
     b.textContent?.includes("Abrir minha carta"),

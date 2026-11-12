@@ -24,7 +24,6 @@ const createPhotoReader = vi.fn();
 
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 vi.mock("@sentry/nextjs", () => ({ captureMessage: vi.fn(), addBreadcrumb: vi.fn() }));
-vi.mock("./MusicPicker", () => ({ MusicPicker: () => null }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   uploadPhoto: (...args: unknown[]) => uploadPhoto(...args),
@@ -36,7 +35,7 @@ vi.mock("@/lib/image", async (importOriginal) => ({
   createPhotoReader: (...args: unknown[]) => createPhotoReader(...args),
 }));
 
-const { StepPersonalize } = await import("./StepPersonalize");
+const { PhotosField } = await import("./StepPersonalize");
 const { RequestTimeoutError, ApiClientError } = await import("@/lib/api");
 const realImage = await vi.importActual<typeof import("@/lib/image")>("@/lib/image");
 const { PhotoProcessingError } = realImage;
@@ -57,6 +56,10 @@ const CART: Cart = {
   relationshipStartDate: null,
   showRelationshipCounter: false,
   planType: null,
+  presentation: null,
+  presentationOptions: null,
+  publicId: null,
+  sharePreviewVersion: null,
   media: [],
   expiresAt: null,
   publishedAt: null,
@@ -101,12 +104,7 @@ let uuidSeq = 0;
 
 function render(cart: Cart = CART) {
   root.render(
-    <StepPersonalize
-      cart={cart}
-      update={vi.fn()}
-      session={{ cartId: "cart-1", editToken: "tok" }}
-      onMediaChanged={onMediaChanged}
-    />,
+    <PhotosField cart={cart} session={{ cartId: "cart-1", editToken: "tok" }} onMediaChanged={onMediaChanged} />,
   );
 }
 

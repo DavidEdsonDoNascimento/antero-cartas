@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { site } from "@/config/site";
-import { StepIndicator } from "./StepIndicator";
 
 /**
  * Ocupa o mesmo espaço/layout de CreateFlow enquanto a sessão inicial
@@ -22,7 +21,16 @@ export function CreateFlowSkeleton() {
           <span className="text-xs text-grafite/30">Preparando…</span>
         </div>
 
-        <StepIndicator current={1} />
+        <div className="mb-5 flex gap-2" aria-hidden="true">
+          {["Escrever", "Ver", "Finalizar"].map((s, i) => (
+            <span
+              key={s}
+              className={`rounded-full px-3 py-1.5 text-sm font-semibold ${i === 0 ? "bg-vinho text-creme" : "bg-white/70 text-grafite/70"}`}
+            >
+              {i + 1}. {s}
+            </span>
+          ))}
+        </div>
 
         <div className="animate-pulse rounded-2xl bg-white/70 p-5 shadow-sm sm:p-7">
           <div className="mb-5">

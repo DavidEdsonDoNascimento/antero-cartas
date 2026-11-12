@@ -1,3 +1,4 @@
+import type { PresentationId, PresentationOptions } from "@/content/presentation/presets";
 /**
  * Modelo de dados mínimo, proporcional ao MVP.
  * Usado localmente na Fase 1 e pronto para persistência (Prisma) na Fase 2.
@@ -81,6 +82,17 @@ export interface Cart {
   relationshipStartDate: string | null;
   showRelationshipCounter: boolean;
   planType: PlanType | null;
+  /** Estilo 2.0. `null` = carta legada (renderizador antigo, tema em `theme`). */
+  presentation: PresentationId | null;
+  presentationOptions: PresentationOptions | null;
+  /**
+   * Prévia pública `/presente/{publicId}`. Só existe depois da publicação. Quem
+   * tem o link privado já lê a carta inteira, então conhecer este id não amplia
+   * nada; o caminho inverso (prévia → carta) é o que não pode existir.
+   */
+  publicId: string | null;
+  /** 1 = quem criou viu o aviso da prévia com conteúdo real. `null` = prévia genérica. */
+  sharePreviewVersion: number | null;
   media: CartMedia[];
   expiresAt: string | null;
   publishedAt: string | null;

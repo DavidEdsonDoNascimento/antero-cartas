@@ -9,3 +9,11 @@ import { site } from "@/config/site";
 export function buildPublicCartUrl(slug: string): string {
   return `${site.url.replace(/\/+$/, "")}/c/${slug}`;
 }
+
+/**
+ * URL da prévia pública `/presente/{publicId}`. Nunca recebe o slug: as duas
+ * URLs de uma carta são independentes e a prévia não leva à carta.
+ */
+export function buildPublicGiftUrl(publicId: string): string {
+  return `${site.url.replace(/\/+$/, "")}/presente/${publicId}`;
+}

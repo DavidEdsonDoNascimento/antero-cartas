@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { site } from "@/config/site";
 import { demoCart } from "@/content/demoCart";
 import { CardExperience } from "@/components/card/CardExperience";
 import { CreateCta } from "@/components/create/CreateCta";
@@ -17,7 +16,8 @@ export default function DemonstracaoPage() {
         Exemplo fictício de demonstração ·{" "}
         <CreateCta className="underline">criar a minha</CreateCta>
       </div>
-      <CardExperience cart={cart} shareUrl={`${site.url}/demonstracao`} />
+      {/* Exemplo fictício: não há prévia pública para compartilhar. */}
+      <CardExperience cart={cart} share={null} />
     </main>
   );
 }

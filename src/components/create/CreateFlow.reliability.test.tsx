@@ -32,7 +32,7 @@ vi.mock("next/link", () => ({
     </a>
   ),
 }));
-vi.mock("@/components/card/CardPreview", () => ({ CardPreview: () => null }));
+vi.mock("./LetterPreview", () => ({ LetterPreview: () => null }));
 vi.mock("./MusicPicker", () => ({ MusicPicker: () => null }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
@@ -68,7 +68,7 @@ function media(id: string, position: number): CartMedia {
   };
 }
 
-/** Carta que já passa pela validação de todas as etapas. */
+/** Carta completa: passa por Escrever → Ver → Finalizar sem pendência. */
 const CART: Cart = {
   id: "cart-1",
   slug: null,
@@ -85,6 +85,12 @@ const CART: Cart = {
   relationshipStartDate: null,
   showRelationshipCounter: false,
   planType: null,
+  // Já no editor 2.0 e já com o aviso da prévia aceito: abrir e finalizar não
+  // geram salvamento por si só (os testes contam cada envio).
+  presentation: "papel-luz",
+  presentationOptions: null,
+  publicId: null,
+  sharePreviewVersion: 1,
   media: [],
   expiresAt: null,
   publishedAt: null,
@@ -131,13 +137,12 @@ async function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
 
 const messageField = () => container.querySelector("textarea") as HTMLTextAreaElement;
 
-/** Abre o editor retomando um rascunho, na etapa 1. */
+/** Abre o editor retomando um rascunho (sem tela intermediária), em Escrever. */
 async function openEditor(cart: Cart = CART) {
   localStorage.setItem("antero:session", JSON.stringify(SESSION));
   fetchCart.mockResolvedValue({ cart });
   await act(async () => root.render(<CreateFlow />));
   await tick();
-  await click("Continuar esse rascunho");
 }
 
 /** Salvamento bem-sucedido: devolve a carta com um `updatedAt` novo, como o servidor. */
@@ -149,6 +154,8 @@ function serverAccepts() {
 }
 
 beforeEach(() => {
+  // O momento do editor fica na URL: cada teste começa em /criar, sem etapa.
+  window.history.replaceState(null, "", "/criar");
   vi.useFakeTimers();
   vi.clearAllMocks();
   localStorage.clear();
@@ -177,7 +184,6 @@ describe("status do salvamento", () => {
 
   it("vai de salvando para salvo", async () => {
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Mensagem nova");
     expect(text()).toContain("Salvando");
 
@@ -189,7 +195,8 @@ describe("status do salvamento", () => {
 
   it('tocar de novo na opção já escolhida não deixa "Salvando…" preso na tela', async () => {
     await openEditor();
-    await click("Mãe");
+    await click("Ver minha carta");
+    await click("Papel e Luz");
     await tick(5000);
 
     expect(text()).not.toContain("Salvando");
@@ -198,7 +205,6 @@ describe("status do salvamento", () => {
 
   it("voltar ao texto já salvo não dispara salvamento nem fica em andamento", async () => {
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Mensagem antiga!");
     await type(messageField(), "Mensagem antiga");
     await tick(5000);
@@ -211,7 +217,6 @@ describe("status do salvamento", () => {
 
   it("avisa leitores de tela do erro e da recuperação, não de cada salvamento", async () => {
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Primeira versão");
     await tick(1000);
 
@@ -234,7 +239,6 @@ describe("status do salvamento", () => {
 describe("digitação rápida seguida de navegação", () => {
   it("sair da tela antes do fim do debounce ainda envia o último texto", async () => {
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Escrevi e saí correndo");
 
     await tick(100); // bem antes do fim do debounce de 700 ms
@@ -249,7 +253,6 @@ describe("digitação rápida seguida de navegação", () => {
   it("guarda o texto no aparelho antes de qualquer resposta do servidor", async () => {
     patchCart.mockReturnValue(new Promise(() => {})); // rede pendurada
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Guardado já");
 
     expect(localStorage.getItem("antero:draft:unsynced")).toContain("Guardado já");
@@ -260,7 +263,6 @@ describe("retomada após interrupção", () => {
   it("recupera o texto que nunca chegou ao servidor e o sincroniza", async () => {
     patchCart.mockReturnValue(new Promise(() => {})); // aba fecha com a rede pendurada
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Texto que quase se perdeu");
     await act(async () => root.unmount());
 
@@ -270,7 +272,6 @@ describe("retomada após interrupção", () => {
     patchCart.mockReset();
     patchCart.mockImplementation(serverAccepts());
     await openEditor();
-    await click("Próxima etapa");
 
     expect(messageField().value).toBe("Texto que quase se perdeu");
     expect(text()).toContain("Recuperamos");
@@ -283,7 +284,6 @@ describe("retomada após interrupção", () => {
     const message = "Chegou, só a resposta se perdeu";
     patchCart.mockReturnValue(new Promise(() => {}));
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), message);
     await act(async () => root.unmount());
 
@@ -312,7 +312,6 @@ describe("retomada após interrupção", () => {
 
     await act(async () => root.render(<CreateFlow />));
     await tick();
-    await click("Próxima etapa");
 
     expect(messageField().value).toBe("Salvo só aqui");
     expect(text()).toContain("Recuperamos");
@@ -325,7 +324,6 @@ describe("retomada após interrupção", () => {
       JSON.stringify({ cartId: "outra", patch: { message: "De outra carta" } }),
     );
     await openEditor();
-    await click("Próxima etapa");
 
     expect(messageField().value).toBe("Mensagem antiga");
     expect(localStorage.getItem("antero:draft:unsynced")).toBeNull();
@@ -344,7 +342,9 @@ describe("retomada após interrupção", () => {
     fetchCart.mockResolvedValue({ cart: CART });
     await click("Tentar novamente");
     await tick();
-    expect(text()).toContain("Continuar esse rascunho");
+    // Retomada automática: direto no editor, com a faixa discreta.
+    expect(messageField().value).toBe("Mensagem antiga");
+    expect(text()).toContain("Continuando sua cartinha");
   });
 });
 
@@ -352,7 +352,6 @@ describe("falhas e novas tentativas", () => {
   it("tenta de novo sozinho depois de uma falha de rede", async () => {
     patchCart.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Sobrevive à queda");
 
     await tick(10_000);
@@ -366,7 +365,6 @@ describe("falhas e novas tentativas", () => {
   it("erro definitivo não repete sozinho: explica e oferece tentar de novo", async () => {
     patchCart.mockRejectedValue(new ApiClientError("unauthorized", "Token inválido.", 401));
     await openEditor();
-    await click("Próxima etapa");
     await type(messageField(), "Texto importante");
 
     await tick(60_000);
@@ -390,7 +388,6 @@ describe("ordem dos salvamentos", () => {
     const first = deferred<{ cart: Cart }>();
     patchCart.mockReturnValueOnce(first.promise);
     await openEditor();
-    await click("Próxima etapa");
 
     await type(messageField(), "versão 1");
     await tick(800);
@@ -416,7 +413,6 @@ describe("ordem dos salvamentos", () => {
     const second = deferred<{ cart: Cart }>();
     patchCart.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     await openEditor();
-    await click("Próxima etapa");
 
     await type(messageField(), "antigo");
     await tick(800);
@@ -437,7 +433,6 @@ describe("ordem dos salvamentos", () => {
     const first = deferred<{ cart: Cart }>();
     patchCart.mockReturnValueOnce(first.promise);
     await openEditor();
-    await click("Próxima etapa");
 
     await type(messageField(), "digitando");
     await tick(800);
@@ -456,9 +451,9 @@ describe("fotos durante a edição da mensagem", () => {
     const removal = deferred<{ cart: Cart }>();
     removePhoto.mockReturnValue(removal.promise);
     await openEditor(withPhotos);
-    await click("Próxima etapa");
     await type(messageField(), "Texto novo antes de remover a foto");
-    await click("Próxima etapa"); // vai às fotos antes do debounce terminar
+    await click("Ver minha carta"); // vai às fotos antes do debounce terminar
+    await click("Fotos");
 
     await act(async () => {
       (container.querySelector('[aria-label="Remover foto 1"]') as HTMLButtonElement).click();
@@ -466,7 +461,8 @@ describe("fotos durante a edição da mensagem", () => {
     // O servidor responde com a carta como a conhecia: texto antigo.
     removal.resolve({ cart: { ...withPhotos, media: [media("m2", 0)] } });
     await tick();
-    await click("Voltar");
+    await click("Pronto");
+    await click("Editar texto");
 
     expect(messageField().value).toBe("Texto novo antes de remover a foto");
     await tick(1000);
@@ -479,16 +475,17 @@ describe("fotos durante a edição da mensagem", () => {
     const order = deferred<{ cart: Cart }>();
     reorderPhotos.mockReturnValue(order.promise);
     await openEditor(withPhotos);
-    await click("Próxima etapa");
     await type(messageField(), "Texto novo antes de reordenar");
-    await click("Próxima etapa");
+    await click("Ver minha carta");
+    await click("Fotos");
 
     await act(async () => {
       (container.querySelector('[aria-label="Definir foto 2 como capa"]') as HTMLButtonElement).click();
     });
     order.reject(new ApiClientError("server", "Erro.", 500));
     await tick();
-    await click("Voltar");
+    await click("Pronto");
+    await click("Editar texto");
 
     expect(messageField().value).toBe("Texto novo antes de reordenar");
   });
@@ -497,8 +494,8 @@ describe("fotos durante a edição da mensagem", () => {
     const order = deferred<{ cart: Cart }>();
     reorderPhotos.mockReturnValue(order.promise);
     await openEditor(withPhotos);
-    await click("Próxima etapa");
-    await click("Próxima etapa");
+    await click("Ver minha carta");
+    await click("Fotos");
 
     await act(async () => {
       (container.querySelector('[aria-label="Definir foto 2 como capa"]') as HTMLButtonElement).click();
@@ -532,81 +529,101 @@ describe("fotos que não chegaram ao servidor", () => {
     URL.revokeObjectURL = () => {};
   });
 
-  const atPhotos = () => text().includes("Personalize a cartinha");
+  /** Chegou à escolha de plano (o pagamento vem depois dela). */
+  const atPlan = () => text().includes("Continuar para o pagamento");
 
-  it("não deixa sair da etapa enquanto a foto está sendo enviada", async () => {
+  /** Escrever → Ver → painel de fotos. */
+  async function openPhotos() {
+    await click("Ver minha carta");
+    await click("Fotos");
+  }
+
+  it("não deixa finalizar enquanto a foto está sendo enviada", async () => {
     const upload = deferred<{ cart: Cart }>();
     await openEditor();
-    await click("Próxima etapa");
-    await click("Próxima etapa");
+    await openPhotos();
     await selectPhoto(upload.promise);
+    await click("Pronto");
 
-    await click("Próxima etapa");
-    expect(atPhotos()).toBe(true);
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(false);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Aguarde o envio");
 
     upload.resolve({ cart: { ...CART, media: [media("m1", 0)] } });
     await tick();
     expect(container.querySelector('[role="alert"]')).toBeNull();
 
-    await click("Próxima etapa");
-    expect(atPhotos()).toBe(false);
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(true);
   });
 
   it("foto que falhou não segue em silêncio: pede para tentar de novo ou remover", async () => {
     await openEditor();
-    await click("Próxima etapa");
-    await click("Próxima etapa");
+    await openPhotos();
     await selectPhoto(photoError());
     expect(text()).toContain("Falhou");
+    await click("Pronto");
 
-    await click("Próxima etapa");
-    expect(atPhotos()).toBe(true);
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(false);
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("não foi enviada");
 
-    await click("Voltar");
-    expect(atPhotos()).toBe(true);
+    // Fechar o painel não perde a foto: ela continua lá, esperando decisão.
+    await click("Ver fotos");
+    expect(text()).toContain("Falhou");
 
-    // Sair é sempre possível: remover a foto é uma decisão consciente.
+    // Seguir é sempre possível: remover a foto é uma decisão consciente.
     await click("Remover");
-    await click("Próxima etapa");
-    expect(atPhotos()).toBe(false);
+    await click("Pronto");
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(true);
   });
 
   it("tentar de novo com sucesso libera o avanço, com a foto na carta", async () => {
     await openEditor();
-    await click("Próxima etapa");
-    await click("Próxima etapa");
+    await openPhotos();
     await selectPhoto(photoError());
 
     uploadPhoto.mockResolvedValueOnce({ cart: { ...CART, media: [media("m1", 0)] } });
     await click("Tentar de novo");
     await tick();
+    await click("Pronto");
+    expect(text()).toContain("1 foto");
 
-    await click("Próxima etapa");
-    expect(atPhotos()).toBe(false);
-    expect(text()).toContain("1 foto(s)");
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(true);
   });
 
   it("nenhuma foto falha chega à escolha de plano", async () => {
     await openEditor();
-    await click("Próxima etapa");
-    await click("Próxima etapa");
+    await openPhotos();
     await selectPhoto(photoError());
+    await click("Pronto");
 
-    await click("Próxima etapa");
-    expect(text()).not.toContain("Finalizar minha cartinha");
-    expect(text()).not.toContain("Continuar para o pagamento");
+    await click("Está pronta · Finalizar");
+    expect(atPlan()).toBe(false);
+  });
+
+  it("o envio continua com o painel fechado (a fila não para)", async () => {
+    const upload = deferred<{ cart: Cart }>();
+    await openEditor();
+    await openPhotos();
+    await selectPhoto(upload.promise);
+    await click("Pronto");
+    await click("Editar texto");
+
+    upload.resolve({ cart: { ...CART, media: [media("m1", 0)] } });
+    await tick();
+    await click("Ver minha carta");
+    expect(text()).toContain("1 foto");
   });
 });
 
 describe("avanço ao checkout", () => {
-  /** Da etapa 1 até a escolha de plano, com o plano selecionado. */
+  /** De Escrever até a escolha de plano, com o plano selecionado. */
   async function goToPlan() {
-    await click("Próxima etapa");
-    await click("Próxima etapa");
-    await click("Próxima etapa");
-    await click("Finalizar minha cartinha");
+    await click("Ver minha carta");
+    await click("Está pronta · Finalizar");
     await click("Essencial");
   }
 
@@ -661,10 +678,8 @@ describe("avanço ao checkout", () => {
 
   it("não reenvia nada quando tudo já está salvo", async () => {
     await openEditor({ ...CART, planType: "LIMITED" });
-    await click("Próxima etapa");
-    await click("Próxima etapa");
-    await click("Próxima etapa");
-    await click("Finalizar minha cartinha");
+    await click("Ver minha carta");
+    await click("Está pronta · Finalizar");
 
     await click("Continuar para o pagamento");
     await tick();

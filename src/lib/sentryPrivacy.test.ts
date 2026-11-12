@@ -176,3 +176,14 @@ describe("sanitizeEvent", () => {
     expect(sanitizeEvent(hostile as never)).toBeNull();
   });
 });
+
+describe("sanitizeUrl — prévia pública (2.0)", () => {
+  it("mascara o id da prévia e o slug do endpoint de link público", () => {
+    expect(sanitizeUrl("https://cartas.anterosistemas.com.br/presente/abcdefghijkmnpqrstuvwxyz23/foto")).toBe(
+      "https://cartas.anterosistemas.com.br/presente/[id]/foto",
+    );
+    expect(sanitizeUrl("/api/letters/abcdefghijkmnpqrstuvwxyz23/public-link")).toBe(
+      "/api/letters/[slug]/public-link",
+    );
+  });
+});

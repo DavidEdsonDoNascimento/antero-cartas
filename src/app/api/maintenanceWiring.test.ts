@@ -25,6 +25,7 @@ const REVIEWED_READ_ONLY_GET = new Set([
   "api/youtube/search/route.ts", // busca externa; não grava nada
   "api/dev/emails/route.ts", // visualizador de e-mails mock (bloqueado em produção)
   "api/health/route.ts", // SELECT 1 + acesso ao diretório de fotos
+  "presente/[id]/foto/route.ts", // primeira foto da prévia pública, recodificada; só lê
 ]);
 
 const MUTATING = ["POST", "PUT", "PATCH", "DELETE"] as const;

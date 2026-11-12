@@ -55,6 +55,13 @@ const nextConfig: NextConfig = {
           paymentMode,
         }),
       },
+      {
+        // Prévia pública: nunca indexada. O cabeçalho cobre também a foto e a
+        // imagem social; o robots.txt NÃO bloqueia a rota (os robôs de prévia
+        // precisam lê-la para montar o cartão do link).
+        source: "/presente/:path*",
+        headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }],
+      },
     ];
   },
 };

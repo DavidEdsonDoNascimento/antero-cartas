@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { Cart, PlanType } from "@/lib/types";
 import { plans, formatBRL } from "@/config/plans";
 import { flags } from "@/config/flags";
@@ -14,9 +14,11 @@ interface Props {
   busy?: boolean;
   /** Por que não seguiu ao pagamento. */
   error?: string | null;
+  /** Aviso mostrado antes do botão (editor 2.0: o que a prévia pública mostra). */
+  notice?: ReactNode;
 }
 
-export function StepPlan({ cart, update, onContinue, busy = false, error = null }: Props) {
+export function StepPlan({ cart, update, onContinue, busy = false, error = null, notice }: Props) {
   const errorRef = useRef<HTMLParagraphElement>(null);
 
   // No celular o aviso nasce abaixo da dobra, junto do botão que acabou de ser tocado.
@@ -84,6 +86,8 @@ export function StepPlan({ cart, update, onContinue, busy = false, error = null 
           ? "Modo demonstração: nenhuma cobrança é feita. O checkout real entra nas próximas fases."
           : "Você será direcionado ao pagamento seguro."}
       </div>
+
+      {notice}
 
       {error && (
         <p ref={errorRef} role="alert" className="mt-5 rounded-xl bg-vinho/10 p-3 text-center text-sm text-vinho">

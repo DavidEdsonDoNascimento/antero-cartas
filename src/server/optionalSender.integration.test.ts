@@ -22,7 +22,7 @@
  * 6. Carta publicada abrindo sem assinatura (`getPublicCart`).
  * 7. Carta com remetente preenchido, como antes.
  * 8. Os demais campos obrigatórios continuam recusados, no pedido e na
- *    publicação.
+ *    publicação (e, desde a 2.0, também na edição com cobrança aberta).
  */
 import { randomUUID } from "node:crypto";
 import { describe, it, expect, vi, beforeAll, afterEach, afterAll } from "vitest";
@@ -275,8 +275,13 @@ describe.skipIf(!RUN)(
       const { cart, editToken } = await createDraft("recusa-publicacao");
       const order = await orderService.createOrder(editToken, orderInput(cart.id, "recusa-publicacao"));
 
-      // Mensagem apagada com a cobrança aberta.
-      await cartService.updateDraft(cart.id, editToken, { message: "" });
+      // 2.0: apagar a mensagem com a cobrança aberta é recusado na edição
+      // (`keepsPublishable`, ver antero2.integration.test.tsx). A carta só fica
+      // incompleta por um caminho fora da API; mesmo assim a publicação recusa.
+      await expect(cartService.updateDraft(cart.id, editToken, { message: "" })).rejects.toMatchObject({
+        code: "pending_payment_incomplete",
+      });
+      await prisma.cart.update({ where: { id: cart.id }, data: { message: "" } });
 
       await expectConflict(orderService.mockConfirmOrder(order.id, "success"));
 
