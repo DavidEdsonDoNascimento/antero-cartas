@@ -49,8 +49,10 @@ function isLowEndDevice(): boolean {
  *   legada): é o mesmo `onClick`, então o navegador a trata como iniciada pelo
  *   usuário, com mouse, toque ou teclado.
  * - Depois de abrir, o foco vai para o título da carta.
- * - `preview`: usado pelo editor ("Ver como vai abrir"): sem música tocando,
- *   sem compartilhar nem convite.
+ * - `preview`: usado pelo editor ("Ver como vai abrir"): demonstração fiel da
+ *   carta recebida — fotos passam sozinhas e a música toca depois do clique no
+ *   envelope —, mas sem compartilhar, convite, flutuantes nem a contagem de
+ *   abertura real. Fechar a demonstração desmonta tudo (player e timers).
  */
 export function RecipientExperience({
   letter,
@@ -166,9 +168,17 @@ export function RecipientExperience({
           data-entered={stage === "open" || undefined}
           style={stage === "opening" ? { opacity: 0, pointerEvents: "none" } : undefined}
         >
-          <LetterSheet letter={letter} theme={theme} headingId={headingId} headingLevel={1} preview={preview} />
+          <LetterSheet
+            letter={letter}
+            theme={theme}
+            headingId={headingId}
+            headingLevel={1}
+            preview={preview}
+            autoAdvance
+            musicPlays
+          />
 
-          {!preview && letter.music && stage !== "closed" && <OpenCardMusic music={letter.music} />}
+          {letter.music && stage !== "closed" && <OpenCardMusic music={letter.music} />}
 
           {stage === "open" && (
             <div className="ps-actions">

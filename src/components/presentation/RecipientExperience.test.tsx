@@ -332,14 +332,15 @@ describe("indicador flutuante de música (sem duplicar o selo)", () => {
     expect(withBadge.className).toContain("fixed");
   });
 
-  it("preview do editor: nenhum flutuante, em nenhum estado, e nada de música real", () => {
+  it("preview do editor: nenhum flutuante, em nenhum estado (a música toca no player da folha)", () => {
     render({ preview: true });
     expect(dock()).toHaveLength(0);
+    expect(container.querySelector("iframe")).toBeNull(); // fechado: nada toca
     act(() => envelopeButton().click());
     act(() => vi.advanceTimersByTime(2000));
     expect(dock()).toHaveLength(0);
     expect(openedBadge()).toBeNull();
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelectorAll("iframe")).toHaveLength(1); // um único player, o da carta
   });
 
   it.each(PRESENTATION_IDS)("estilo %s: fechado sem duplicar, aberto com o atalho", (style) => {
@@ -353,20 +354,58 @@ describe("indicador flutuante de música (sem duplicar o selo)", () => {
 });
 
 describe("visualização \"Ver como vai abrir\"", () => {
-  it("o envelope também abre, mas nunca toca música nem mostra compartilhar", () => {
+  const players = () => container.querySelectorAll("iframe");
+
+  it("antes de abrir não há player (nada toca sem o clique no envelope)", () => {
     render({ preview: true });
     expect(musicTag()).not.toBeNull(); // o selo só informa; não toca nada
+    expect(players()).toHaveLength(0);
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Voltar para a edição")).toBe(true);
+  });
+
+  it("a música monta no próprio clique no envelope, como na carta publicada, com um só player", () => {
+    render({ preview: true });
+    act(() => envelopeButton().click());
+    // Síncrono ao clique (gesto do usuário): o iframe com autoplay já está montado.
+    const frame = container.querySelector<HTMLIFrameElement>("#musica-da-cartinha iframe");
+    expect(frame?.src).toContain(`/embed/${MUSIC!.videoId}`);
+    expect(frame?.src).toContain("autoplay=1");
+    expect(frame?.getAttribute("allow")).toContain("autoplay");
+    act(() => vi.advanceTimersByTime(2000));
+    expect(players()).toHaveLength(1);
+  });
+
+  it("sem música: nenhum player depois de abrir", () => {
+    render({ preview: true, letter: withoutMusic });
     act(() => envelopeButton().click());
     act(() => vi.advanceTimersByTime(2000));
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(players()).toHaveLength(0);
+  });
+
+  it("continua sem compartilhar, sem convite de criação e sem contar abertura real", () => {
+    render({ preview: true });
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
     expect(container.textContent).not.toContain("Compartilhar que ganhei");
+    expect(container.querySelector(".ps-invite")).toBeNull();
+    expect(container.querySelector('a[href="/criar"]')).toBeNull();
     expect(vi.mocked(track).mock.calls.filter(([name]) => name === "cart_opened")).toHaveLength(0);
   });
 
-  it("antes de abrir também não há player, e há caminho de volta à edição", () => {
+  it("o texto do indicador de música descreve o que acontece de verdade (e não promete tocar depois)", () => {
     render({ preview: true });
-    expect(container.querySelector("iframe")).toBeNull();
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Voltar para a edição")).toBe(true);
+    act(() => envelopeButton().click());
+    act(() => vi.advanceTimersByTime(2000));
+    expect(container.textContent).not.toContain("Toca quando o envelope abrir");
+    expect(container.querySelector(".ps-sheet__music-hint")?.textContent).toBe("Música da cartinha");
+  });
+
+  it("fechar (desmontar) encerra o player: nada fica tocando", () => {
+    render({ preview: true });
+    act(() => envelopeButton().click());
+    expect(players()).toHaveLength(1);
+    act(() => root.render(<div />));
+    expect(players()).toHaveLength(0);
   });
 });
 
